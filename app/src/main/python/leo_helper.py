@@ -5,6 +5,7 @@ import hashlib
 import html
 import io
 import json
+import re
 import os
 from pathlib import Path
 import secrets
@@ -87,7 +88,18 @@ small{display:block;color:var(--muted);font-size:11px}
 .delete{background:none;border:0;min-width:32px;color:var(--muted);padding:0 3px}
 #lightbox{border:0;background:#0b1023;color:white;max-width:none;max-height:none;width:100%;height:100%;margin:0;padding:0}
 #lightbox::backdrop{background:#0b1023}
-#lightbox img{width:100%;height:100%;object-fit:contain}
+.zoom-area{width:100%;height:100%;overflow:hidden;touch-action:none}
+#lightbox img{display:block;width:100%;height:100%;object-fit:contain;user-select:none}
+.photo-counter{position:absolute;top:20px;left:16px;background:#141a34;color:white;padding:5px 9px;border-radius:10px}
+.photo-counter:empty{display:none}
+header{justify-content:space-between}
+.profile .gallery{margin-inline:-14px;border-radius:0}.profile .slide{height:min(68vh,680px);aspect-ratio:auto;max-height:none}.profile .slide img{object-fit:cover}.profile .video img{object-fit:contain}
+[data-swipe-card]{position:relative;touch-action:pan-y;transform-origin:50% 85%}[data-swipe-card] .slides{overflow-x:hidden}
+.swipe-mark{position:absolute;inset:32% 0 auto;pointer-events:none;text-align:center;font-size:78px;color:white;text-shadow:0 3px 20px #111}
+body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:5px}.sr-only{position:absolute;width:1px;height:1px;min-height:0;overflow:hidden;clip-path:inset(50%);padding:0;border:0}.sr-only:focus-visible{clip-path:none;width:auto;height:44px;z-index:3}
+.bot-row{display:flex;gap:5px;margin-top:6px}.bot-row button{flex:1;min-width:0;overflow-wrap:anywhere}
+.journal-counts button{padding:7px;text-align:left;background:var(--panel);font-size:12px;color:var(--muted)}.journal-counts strong{display:block;margin-top:3px;color:var(--ink);font-size:20px}.journal-counts button[aria-pressed=true]{border-color:var(--accent)}
+#journal-search{width:100%;min-height:44px;margin:0 0 10px;padding:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:10px;color:var(--ink);font:inherit}
 #lightbox button{position:absolute;top:12px;right:12px;min-width:46px}
 @media(prefers-reduced-motion:reduce){*,*::after{transition:none!important}}
 """
@@ -131,28 +143,191 @@ const thumbnails = new IntersectionObserver(entries => {
 }, {rootMargin: '64px'});
 document.querySelectorAll('img[data-media]').forEach(image => thumbnails.observe(image));
 
+const galleryItems = slides ? [...slides.children] : [];
+function selectSlide(index) {
+  slides.scrollTo({left: index * slides.clientWidth, behavior: 'instant'});
+}
+
 const lightbox = document.querySelector('#lightbox');
-const full = lightbox.querySelector('img');
-document.querySelectorAll('[data-open]').forEach(button => button.addEventListener('click', () => {
-  const image = button.querySelector('img');
-  if (!image.complete || !image.naturalWidth) return;
-  full.src = image.src;
-  if (button.classList.contains('avatar')) {
-    const original = new URL(image.dataset.media, location.href);
-    original.searchParams.set('kind', 'photo');
-    mediaUrl(original).then(url => {
-      if (lightbox.open && full.src === image.src) full.src = url;
+const zoom = lightbox.querySelector('.zoom-area');
+const full = zoom.querySelector('img');
+const counter = lightbox.querySelector('output');
+let currentPhoto = 0, photoList = [], journalPhoto = false;
+let scale = 1, offsetX = 0, offsetY = 0, opened = 0;
+const fingers = new Map();
+let pinchStart = null;
+function drawZoom() {
+  const boundX = zoom.clientWidth * (scale - 1) / 2;
+  const boundY = zoom.clientHeight * (scale - 1) / 2;
+  offsetX = Math.max(-boundX, Math.min(boundX, offsetX));
+  offsetY = Math.max(-boundY, Math.min(boundY, offsetY));
+  full.style.transform = 'translate(' + offsetX + 'px,' + offsetY + 'px) scale(' + scale + ')';
+}
+function showPhoto(index) {
+  if (index < 0 || index >= photoList.length) return;
+  currentPhoto = index;
+  const image = photoList[index];
+  const token = ++opened;
+  scale = 1;
+  offsetX = offsetY = 0;
+  drawZoom();
+  counter.textContent = photoList.length > 1 ? (index + 1) + ' / ' + photoList.length : '';
+  if (full.src.startsWith('blob:') && ![...document.images].some(img => img !== full && img.src === full.src)) {
+    URL.revokeObjectURL(full.src);
+  }
+  full.removeAttribute('src');
+  if (image.naturalWidth) full.src = image.src;
+  if (!image.naturalWidth || journalPhoto) {
+    const source = new URL(image.dataset.media, location.href);
+    source.searchParams.set('kind', 'photo');
+    mediaUrl(source).then(url => {
+      if (lightbox.open && opened === token) full.src = url;
       else URL.revokeObjectURL(url);
     }).catch(() => {});
   }
+}
+document.querySelectorAll('[data-open]').forEach(button => button.addEventListener('click', event => {
+  const image = button.querySelector('img');
+  journalPhoto = button.classList.contains('avatar');
+  if (!journalPhoto && event.detail !== 0 && galleryItems.length > 1) {
+    const box = button.getBoundingClientRect();
+    const part = (event.clientX - box.left) / box.width;
+    const index = galleryItems.indexOf(button);
+    if (part < .25 || part > .75) {
+      const next = index + (part < .25 ? -1 : 1);
+      if (next >= 0 && next < galleryItems.length) selectSlide(next);
+      return;
+    }
+  }
+  photoList = journalPhoto ? [image] : [...slides.querySelectorAll('[data-open] img')];
   lightbox.showModal();
+  showPhoto(photoList.indexOf(image));
 }));
+zoom.addEventListener('pointerdown', event => {
+  zoom.setPointerCapture(event.pointerId);
+  fingers.set(event.pointerId, {x: event.clientX, y: event.clientY, moved: fingers.size > 0});
+  if (fingers.size === 2) {
+    const [a, b] = [...fingers.values()];
+    a.moved = b.moved = true;
+    pinchStart = {distance: Math.hypot(a.x - b.x, a.y - b.y), scale,
+                  x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, offsetX, offsetY};
+  }
+});
+zoom.addEventListener('pointermove', event => {
+  const finger = fingers.get(event.pointerId);
+  if (!finger) return;
+  const dx = event.clientX - finger.x, dy = event.clientY - finger.y;
+  if (!finger.moved && Math.hypot(dx, dy) < 5) return;
+  finger.x = event.clientX;
+  finger.y = event.clientY;
+  finger.moved = true;
+  if (fingers.size === 2 && pinchStart) {
+    const [a, b] = [...fingers.values()];
+    scale = Math.max(1, Math.min(5, pinchStart.scale * Math.hypot(a.x - b.x, a.y - b.y) / Math.max(1, pinchStart.distance)));
+    offsetX = pinchStart.offsetX + (a.x + b.x) / 2 - pinchStart.x;
+    offsetY = pinchStart.offsetY + (a.y + b.y) / 2 - pinchStart.y;
+  } else if (fingers.size === 1 && scale > 1) {
+    offsetX += dx;
+    offsetY += dy;
+  }
+  drawZoom();
+});
+function finishZoom(event) {
+  const finger = fingers.get(event.pointerId);
+  fingers.delete(event.pointerId);
+  pinchStart = null;
+  if (!finger || finger.moved || event.type !== 'pointerup') return;
+  const box = zoom.getBoundingClientRect();
+  const part = (event.clientX - box.left) / box.width;
+  if (part < .25) showPhoto(currentPhoto - 1);
+  else if (part > .75) showPhoto(currentPhoto + 1);
+  else {
+    scale = scale > 1 ? 1 : 2;
+    drawZoom();
+  }
+}
+zoom.addEventListener('pointerup', finishZoom);
+zoom.addEventListener('pointercancel', finishZoom);
 lightbox.querySelector('button').addEventListener('click', () => lightbox.close());
 lightbox.addEventListener('close', () => {
+  opened++;
+  fingers.clear();
   const url = full.src;
   if (url.startsWith('blob:') && ![...document.images].some(img => img !== full && img.src === url)) URL.revokeObjectURL(url);
   full.removeAttribute('src');
 });
+
+const card = document.querySelector('[data-swipe-card]');
+if (card) {
+  const mark = card.querySelector('.swipe-mark');
+  let gesture, preventClick = false, sending = false;
+  card.addEventListener('pointerdown', event => {
+    if (sending || event.button !== 0 || !event.isPrimary || event.target.closest('video,.dots,[data-video]')) return;
+    preventClick = false;
+    gesture = {id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, dragging: false};
+  });
+  card.addEventListener('pointermove', event => {
+    if (!gesture || gesture.id !== event.pointerId) return;
+    const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
+    if (!gesture.dragging) {
+      if (Math.abs(dx) < 12 || Math.abs(dx) <= Math.abs(dy) * 1.25) return;
+      gesture.dragging = true;
+      card.setPointerCapture(event.pointerId);
+      card.style.transition = 'none';
+    }
+    gesture.dx = dx;
+    card.style.transform = 'translateX(' + dx + 'px) rotate(' + dx / 22 + 'deg)';
+    mark.textContent = dx >= 0 ? '♥' : '×';
+    mark.style.opacity = Math.min(1, Math.abs(dx) / 100);
+  });
+  function endSwipe(event) {
+    if (!gesture || gesture.id !== event.pointerId) return;
+    const {dx, dragging} = gesture;
+    gesture = null;
+    if (!dragging) return;
+    preventClick = true;
+    const direction = dx > 0 ? 'right' : 'left';
+    const action = document.querySelector('[data-swipe="' + direction + '"]');
+    if (event.type === 'pointerup' && action && Math.abs(dx) >= Math.max(68, innerWidth * .22)) {
+      sending = true;
+      card.style.transition = 'transform 140ms ease-out';
+      card.style.transform = 'translateX(' + (dx > 0 ? '115vw' : '-115vw') + ') rotate(' + (dx > 0 ? 13 : -13) + 'deg)';
+      setTimeout(() => action.form.requestSubmit(action), 145);
+    } else {
+      card.style.transition = 'transform 150ms ease-out';
+      card.style.transform = '';
+      mark.textContent = '';
+    }
+  }
+  card.addEventListener('pointerup', endSwipe);
+  card.addEventListener('pointercancel', endSwipe);
+  card.addEventListener('click', event => {
+    if (preventClick) { event.preventDefault(); event.stopImmediatePropagation(); }
+  }, true);
+}
+
+const search = document.querySelector('#journal-search');
+if (search) {
+  const filters = [...document.querySelectorAll('[data-filter]')];
+  const rows = [...document.querySelectorAll('tr[data-answer]')];
+  let filter = 'all';
+  function filterRows() {
+    const query = search.value.trim().toLocaleLowerCase('ru');
+    let shown = 0;
+    rows.forEach(row => {
+      row.hidden = (filter !== 'all' && row.dataset.answer !== filter) ||
+          !row.dataset.caption.toLocaleLowerCase('ru').includes(query);
+      if (!row.hidden) shown++;
+    });
+    document.querySelector('#no-results').hidden = shown !== 0 || (!rows.length && !query && filter === 'all');
+  }
+  search.addEventListener('input', filterRows);
+  filters.forEach(button => button.addEventListener('click', () => {
+    filter = button.dataset.filter;
+    filters.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+    filterRows();
+  }));
+}
 document.querySelectorAll('[data-video]').forEach(button => button.addEventListener('click', async () => {
   button.disabled = true;
   button.textContent = 'Загрузка…';
@@ -534,7 +709,10 @@ class Helper:
         if group and len(group) == 1 and (group[0].media is None or isinstance(group[0].media, MessageMediaWebPage)) and group[0].raw_text.strip():
             # A previous keyboard is useful for profiles, but insufficient to identify an ad.
             current = [b.text for row in group[0].buttons or [] for b in row]
-            return [(i, b) for i, b in safe if b.text in current], True
+            menu = len(re.findall(r"(?m)^\s*\d+[.)]\s+", group[0].raw_text)) >= 2
+            numbered = lambda label: bool(re.fullmatch(r"\d+(?:\s*🚀)?", emoji(label)))
+            actions = [(i, b) for i, b in safe if b.text in current or (menu and numbered(b.text))]
+            return actions, not menu and not any(numbered(b.text) for _, b in actions)
         return [], False
 
     def manual_actions(self, group, buttons, key):
@@ -697,7 +875,8 @@ class Page(BaseHTTPRequestHandler):
                 love_active = str(bool(choice and emoji(choice) == "❤")).lower()
                 down_active = str(bool(choice and emoji(choice) == "👎")).lower()
                 name = caption.strip().split("\n", 1)[0].split(" – ", 1)[0]
-                rows.append(f"""<tr><td><div class=person><button class=avatar type=button data-open aria-label="Открыть фото анкеты">
+                category = {"❤": "liked", "👎": "disliked"}.get(emoji(answer), "") if status == "sent" else ""
+                rows.append(f"""<tr data-answer="{category}" data-caption="{ESC(caption)}"><td><div class=person><button class=avatar type=button data-open aria-label="Открыть фото анкеты">
 <img data-media="{BASE}/media?id={row_id}&amp;kind=thumb" alt=""></button>
 <div class=person-text><strong title="{ESC(caption)}">{ESC(name)}</strong><small>{ESC(date[5:16])}</small></div></div></td>
 <td class=answer>{reaction_glyph(emoji(answer))}{"" if status == "sent" else " <small>Не подтверждён</small>"}</td>
@@ -712,17 +891,19 @@ class Page(BaseHTTPRequestHandler):
             table = "".join(rows) or '<tr><td colspan="3">Журнал пока пуст.</td></tr>'
             self.send(self.page("Журнал", f"""
 <span hidden id=watch data-url="{BASE}/state?journal=1" data-journal="true" data-revision="{app.sync_version}"></span>
-<dl class=journal-counts aria-label="Статистика журнала">
-<div><dt>Всего анкет</dt><dd>{total}</dd></div>
-<div><dt>Лайки</dt><dd>{glyph("heart")} {liked}</dd></div>
-<div><dt>Дизлайки</dt><dd>{glyph("down")} {disliked}</dd></div></dl>
+<div class=journal-counts role=group aria-label="Фильтры журнала">
+<button type=button data-filter=all aria-pressed=true>Всего анкет <strong>{total}</strong></button>
+<button type=button data-filter=liked aria-pressed=false>Лайки <strong>{glyph("heart")} {liked}</strong></button>
+<button type=button data-filter=disliked aria-pressed=false>Дизлайки <strong>{glyph("down")} {disliked}</strong></button></div>
+<input type=search id=journal-search aria-label="Поиск в журнале" placeholder="Имя, город или текст анкеты">
+<p id=no-results hidden>Анкеты не найдены.</p>
 <div class=table-wrap><table><thead><tr><th scope=col>Анкета</th><th scope=col>Ответ</th>
 <th scope=col>При повторе</th></tr></thead><tbody>{table}</tbody></table></div>""",
                 journal=True, controls=f"""<div class=journal-sync>
 <form method=post action="{BASE}/journal">
 <label for=history-limit>Последние сообщения</label>
 <input id=history-limit name=history_limit type=number min=1 max="{MAX_HISTORY_LIMIT}" step=1 required value="{app.history_limit}">
-<button name=action value=refresh>{glyph("refresh")} Обновить журнал</button></form>
+<button class=icon name=action value=refresh title="Обновить журнал" aria-label="Обновить журнал">{glyph("refresh")}</button></form>
 <p role=alert {"" if app.journal_notice else "hidden"}>{ESC(app.journal_notice)}</p>
 <div role=status id=journal-progress{"" if app.journal_loading() else " hidden"}>{glyph("refresh")}
 <span>{ESC(app.history_status() or "Загружаем ответы…")}</span></div></div>"""))
@@ -781,17 +962,25 @@ class Page(BaseHTTPRequestHandler):
             content = self.gallery(top, photos)
             content += self.profile_caption(caption) if caption else "<p>Ожидание сообщения от бота.</p>"
             footer = ""
+            swipe = ""
             if top and top.id != app.waiting and not app.sent(top) and not app.auto and not app.composing:
-                controls = []
-                for action, label_text in actions:
-                    reaction = emoji(label_text)
-                    label = {"❤": "Нравится", "👎": "Не нравится"}.get(reaction, label_text)
-                    variant = "heart" if key and reaction == "❤" else ""
-                    controls.append(f'<button form=profile-form class="{variant}" name=action value="{action}" '
-                                    f'aria-label="{ESC(label)}">{reaction_glyph(reaction) if key else ESC(label_text)}</button>' )
+                controls = {}
+                for action, label in actions:
+                    reaction = emoji(label)
+                    direction = {"❤": "right", "👎": "left"}.get(reaction)
+                    if key and direction:
+                        swipe += f'<button class=sr-only name=action value="{action}" data-swipe="{direction}">' + (
+                            "Нравится" if direction == "right" else "Не нравится") + "</button>"
+                        continue
+                    controls[int(action[6:])] = f'<button form=profile-form name=action value="{action}">{ESC(label)}</button>'
+                if controls:
+                    layout = self.keyboard_rows(group, buttons, controls)
+                    footer += layout
                     if ad:
-                        controls.append(f'<button form=profile-form name=action value="learn:{action[6:]}">Запомнить как пропуск рекламы</button>')
-                footer += '<div class="actions">' + ''.join(controls) + '</div>'
+                        choices = "".join(
+                            f'<button form=profile-form name=action value="learn:{action[6:]}">{ESC(label)}</button>'
+                            for action, label in actions)
+                        footer += '<details><summary>Запомнить пропуск рекламы</summary><div class=bot-row>' + choices + '</div></details>'
             if app.composing:
                 content += """<div class=composer><label for=body>Сообщение для анкеты</label>
 <textarea id=body name=body maxlength=4096 rows=4 placeholder="Введите текст"></textarea>
@@ -824,11 +1013,27 @@ class Page(BaseHTTPRequestHandler):
 <form id=profile-form method=post action="{BASE}">
 <input type=hidden name=id value="{top.id if top else 0}">
 <input type=hidden name=revision value="{app.current_revision()}">
-{notice}<section class=profile>{content}</section></form>{watch}""",
+{notice}<section class=profile {"data-swipe-card" if swipe else ""}>{content}
+<span class=swipe-mark aria-hidden=true></span></section>{swipe}</form>{watch}""",
                 controls=utilities + footer))
         except Exception as exc:
             app.auto = False
             self.send(f'<meta charset=utf-8><p>{ESC(str(exc))}</p><a href="{BASE}">Попробовать снова</a>', code=503)
+
+    @staticmethod
+    def keyboard_rows(group, buttons, controls):
+        for message in group:
+            rows = message.buttons or []
+            if [b for row in rows for b in row] == buttons:
+                index = 0
+                parts = []
+                for row in rows:
+                    selected = [controls[i] for i in range(index, index + len(row)) if i in controls]
+                    index += len(row)
+                    if selected:
+                        parts.append('<div class=bot-row>' + "".join(selected) + '</div>')
+                return "".join(parts)
+        return '<div class=bot-row>' + "".join(controls.values()) + '</div>'
 
     def page(self, title, content, *, journal=False, controls=""):
         path = BASE + "/journal" if journal else BASE
@@ -843,15 +1048,15 @@ class Page(BaseHTTPRequestHandler):
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>{title} — Помощник Дайвинчика</title>
 <style>{APP_CSS}</style>
-<main><header><h1>{title}</h1></header>
+<main><header><h1>{title}</h1>{export}</header>
 {content}</main>
 <footer id=dock>{controls}
 <div class=dock-bottom><nav aria-label="Разделы"><a href="{BASE}"{profile_active}>{glyph("people")} Анкеты</a>
-<a href="{BASE}/journal"{journal_active}>{glyph("list")} Журнал</a></nav>{export}
+<a href="{BASE}/journal"{journal_active}>{glyph("list")} Журнал</a></nav>
 <form method=post action="{path}"><button class=icon name=action value="theme:{next_theme}"
  aria-label="{theme_label}" title="{theme_label}">{glyph("sun" if dark else "moon")}</button></form>
 </div></footer>
-<dialog id=lightbox aria-label="Просмотр фотографии"><img alt="Фото анкеты">
+<dialog id=lightbox aria-label="Просмотр фотографии"><div class=zoom-area><img alt="Фото анкеты" draggable=false></div><output class=photo-counter></output>
 <button type=button aria-label="Закрыть фото">{glyph("close")}</button></dialog>
 <script>{GALLERY_JS}</script></html>"""
 
@@ -979,7 +1184,7 @@ def session(client, prompt, secret_prompt):
         client.disconnect()
 
 
-def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_stop=None):
+def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_stop=None, on_auto_stopped=None):
     global app, ROOT
     if data_dir is not None:
         ROOT = Path(data_dir) / "leo-helper"
@@ -1022,6 +1227,8 @@ def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_
                     except Exception as exc:
                         app.auto = False
                         app.notice = f"Остановлено. Проверьте чат. {exc}"
+                    if not app.auto and on_auto_stopped:
+                        on_auto_stopped("Откройте приложение, чтобы продолжить просмотр.")
                 get_running_loop().run_until_complete(asyncio.sleep(0.015))
 
 

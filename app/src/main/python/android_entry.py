@@ -13,6 +13,7 @@ def run(activity, data_dir):
             on_ready=activity.ready,
             data_dir=data_dir,
             should_stop=activity.isClosing,
+            on_auto_stopped=activity.notifyAutoStopped,
         )
     finally:
         loop.close()

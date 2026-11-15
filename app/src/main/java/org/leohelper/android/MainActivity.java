@@ -1,9 +1,16 @@
 package org.leohelper.android;
 
+import android.Manifest;
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.net.Uri;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.webkit.WebChromeClient;
@@ -23,6 +30,8 @@ import java.util.concurrent.CountDownLatch;
 
 public final class MainActivity extends Activity {
     private static final int SAVE_CSV = 1;
+    private static final int NOTIFICATION_PERMISSION = 2;
+    private static final String AUTO_CHANNEL = "auto_skip";
     private WebView panel;
     private String baseUrl;
     private volatile boolean closing;
@@ -50,6 +59,7 @@ public final class MainActivity extends Activity {
             }
         });
         setContentView(panel);
+        prepareNotifications();
         startHelper();
     }
 
@@ -59,6 +69,40 @@ public final class MainActivity extends Activity {
         String visible = panel.getUrl();
         if ((baseUrl + "/journal").equals(visible)) panel.loadUrl(visible);
         else panel.loadUrl(baseUrl);
+    }
+
+    private void prepareNotifications() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            getSystemService(NotificationManager.class).createNotificationChannel(
+                new NotificationChannel(AUTO_CHANNEL, "Автопропуск", NotificationManager.IMPORTANCE_DEFAULT));
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !getPreferences(MODE_PRIVATE).getBoolean("notificationsAsked", false)) {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("notificationsAsked", true).apply();
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION);
+        }
+    }
+
+    public void notifyAutoStopped(String reason) {
+        runOnUiThread(() -> {
+            if (closing || (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)) return;
+            Intent intent = new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PendingIntent open = PendingIntent.getActivity(this, 0, intent,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            Notification.Builder notification = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, AUTO_CHANNEL) : new Notification.Builder(this);
+            getSystemService(NotificationManager.class).notify(1, notification
+                .setSmallIcon(R.drawable.leo_notification)
+                .setContentTitle("Автопропуск остановился")
+                .setContentText(reason)
+                .setContentIntent(open)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setAutoCancel(true)
+                .build());
+        });
     }
 
     private void startHelper() {
