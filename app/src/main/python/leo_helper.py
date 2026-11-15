@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from collections import OrderedDict
 import csv
 import hashlib
@@ -15,12 +16,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from contextlib import contextmanager
 from urllib.parse import parse_qs, urlsplit
 
-from telethon import events
+from telethon import events, utils
 from telethon.errors import FloodWaitError
 from telethon.helpers import get_running_loop
 
 from telethon.sync import TelegramClient
-from telethon.tl.types import ButtonTypeDefault, InlineButtonTypeCallback, MessageMediaWebPage, ReplyKeyboardHide
+from telethon.tl.types import PhotoStrippedSize, ButtonTypeDefault, InlineButtonTypeCallback, MessageMediaWebPage, ReplyKeyboardHide
 
 ROOT = Path.home() / ".leo-helper"
 
@@ -30,6 +31,7 @@ BOT = "leomatchbot"
 MESSAGE_COMMAND = "💌 📹 🎤"
 SLEEP_COMMAND = "💤"
 MAX_HISTORY_LIMIT = 1000
+VIDEO_BLOCK = 512 * 1024
 ESC = html.escape
 
 APP_CSS = """
@@ -93,7 +95,26 @@ small{display:block;color:var(--muted);font-size:11px}
 .photo-counter{position:absolute;top:20px;left:16px;background:#141a34;color:white;padding:5px 9px;border-radius:10px}
 .photo-counter:empty{display:none}
 header{justify-content:space-between}
-.profile .gallery{margin-inline:-14px;border-radius:0}.profile .slide{height:min(68vh,680px);aspect-ratio:auto;max-height:none}.profile .slide img{object-fit:cover}.profile .video img{object-fit:contain}
+.profile .gallery{margin-inline:-14px;border-radius:0}.profile .slide{height:min(68vh,680px);aspect-ratio:auto;max-height:none}.gallery{position:relative}.profile .slide{background:#11182a}
+.profile .slide .original{position:absolute;inset:0;height:100%;width:100%;object-fit:contain;opacity:0;transition:opacity .24s ease}
+.profile .slide .original.ready{opacity:1}
+.profile .slide .preview{position:absolute;inset:0;height:100%;width:100%;object-fit:cover;filter:blur(14px) brightness(.8);transform:scale(1.08)}
+.profile .slide:has(.original:not(.ready)):after{content:"";position:absolute;z-index:1;left:calc(50% - 14px);top:calc(50% - 14px);width:28px;height:28px;border:2px solid #ffffff55;border-top-color:white;border-radius:100%;animation:sync-spin 1s linear infinite;pointer-events:none}
+.profile .slide:has(.original[data-failed]):after{display:none}
+.profile .slide video{position:relative;opacity:0;object-fit:contain}
+.profile .slide video.ready{opacity:1}
+.video-error{position:absolute;inset:42% 0 auto;text-align:center;color:white}
+.profile-identity,.profile-bio{position:absolute;z-index:1;left:0;right:0;color:white;white-space:pre-wrap;overflow-wrap:anywhere}
+.profile-identity{top:0;background:linear-gradient(#050912b8,transparent);padding:13px 16px 22px;pointer-events:none}
+.profile-identity h2{margin:0;color:#fff;font-weight:800;text-shadow:0 1px 7px #000}
+.profile-identity span{display:block;font-size:13px;color:#d2d5dc;margin-top:3px}
+.profile-bio{bottom:0;max-height:26%;overflow:auto;background:linear-gradient(transparent,#050912e8 44%);padding:18px 16px 12px;font-size:15px;text-shadow:0 1px 5px #000;touch-action:pan-y}
+.gallery:has(.dots) .profile-bio{bottom:34px}
+.gallery:has(video) .profile-bio{bottom:48px}.gallery:has(video):has(.dots) .profile-bio{bottom:82px}
+.toolbar{flex:0 1 auto;min-width:0}.toolbar .auto{gap:5px;font-size:12px;white-space:nowrap}.toolbar .icon{min-width:34px;padding:0 4px}.toolbar .switch{width:34px;flex:none;height:22px}.toolbar .switch:after{width:14px;height:14px}.toolbar .auto[aria-checked=true] .switch:after{transform:translateX(12px)}
+[data-swipe-card]::after{content:"";position:absolute;z-index:2;inset:42% 0 0;pointer-events:none;background:linear-gradient(transparent,var(--swipe-tint,transparent));opacity:var(--swipe-glow,0);transition:opacity .16s ease}
+.swipe-mark{z-index:3}
+@media(prefers-reduced-motion:reduce){.profile .slide:after{animation:none!important}}
 [data-swipe-card]{position:relative;touch-action:pan-y;transform-origin:50% 85%}[data-swipe-card] .slides{overflow-x:hidden}
 .swipe-mark{position:absolute;inset:32% 0 auto;pointer-events:none;text-align:center;font-size:78px;color:white;text-shadow:0 3px 20px #111}
 body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:5px}.sr-only{position:absolute;width:1px;height:1px;min-height:0;overflow:hidden;clip-path:inset(50%);padding:0;border:0}.sr-only:focus-visible{clip-path:none;width:auto;height:44px;z-index:3}
@@ -136,7 +157,10 @@ async function mediaUrl(path) {
 const thumbnails = new IntersectionObserver(entries => {
   entries.filter(entry => entry.isIntersecting).forEach(({target: image}) => {
     thumbnails.unobserve(image);
-    mediaUrl(image.dataset.media).then(url => { image.src = url; }).catch(() => {
+    mediaUrl(image.dataset.media).then(url => {
+      image.addEventListener('load', () => image.classList.add('ready'), {once: true});
+      image.src = url;
+    }).catch(() => {
       image.dataset.failed = '';
     });
   });
@@ -187,7 +211,7 @@ function showPhoto(index) {
   }
 }
 document.querySelectorAll('[data-open]').forEach(button => button.addEventListener('click', event => {
-  const image = button.querySelector('img');
+  const image = button.querySelector('img.original') || button.querySelector('img');
   journalPhoto = button.classList.contains('avatar');
   if (!journalPhoto && event.detail !== 0 && galleryItems.length > 1) {
     const box = button.getBoundingClientRect();
@@ -199,8 +223,9 @@ document.querySelectorAll('[data-open]').forEach(button => button.addEventListen
       return;
     }
   }
-  photoList = journalPhoto ? [image] : [...slides.querySelectorAll('[data-open] img')];
+  photoList = journalPhoto ? [image] : [...slides.querySelectorAll('[data-open] img.original')];
   lightbox.showModal();
+  visibleVideos.forEach(video => { video.pause(); delete video.dataset.started; });
   showPhoto(photoList.indexOf(image));
 }));
 zoom.addEventListener('pointerdown', event => {
@@ -262,7 +287,7 @@ if (card) {
   const mark = card.querySelector('.swipe-mark');
   let gesture, preventClick = false, sending = false;
   card.addEventListener('pointerdown', event => {
-    if (sending || event.button !== 0 || !event.isPrimary || event.target.closest('video,.dots,[data-video]')) return;
+    if (sending || event.button !== 0 || !event.isPrimary || event.target.closest('.dots,.profile-bio') || (event.target.matches('video') && event.clientY > event.target.getBoundingClientRect().bottom - 50)) return;
     preventClick = false;
     gesture = {id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, dragging: false};
   });
@@ -278,7 +303,10 @@ if (card) {
     gesture.dx = dx;
     card.style.transform = 'translateX(' + dx + 'px) rotate(' + dx / 22 + 'deg)';
     mark.textContent = dx >= 0 ? '♥' : '×';
-    mark.style.opacity = Math.min(1, Math.abs(dx) / 100);
+    const strength = Math.min(1, Math.abs(dx) / 100);
+    mark.style.opacity = strength;
+    card.style.setProperty('--swipe-tint', dx > 0 ? '#28b76edb' : '#d83a42de');
+    card.style.setProperty('--swipe-glow', strength);
   });
   function endSwipe(event) {
     if (!gesture || gesture.id !== event.pointerId) return;
@@ -297,6 +325,7 @@ if (card) {
       card.style.transition = 'transform 150ms ease-out';
       card.style.transform = '';
       mark.textContent = '';
+      card.style.setProperty('--swipe-glow', 0);
     }
   }
   card.addEventListener('pointerup', endSwipe);
@@ -328,24 +357,42 @@ if (search) {
     filterRows();
   }));
 }
-document.querySelectorAll('[data-video]').forEach(button => button.addEventListener('click', async () => {
-  button.disabled = true;
-  button.textContent = 'Загрузка…';
-  try {
-    const video = document.createElement('video');
-    video.controls = true;
-    video.playsInline = true;
-    video.src = await mediaUrl(button.dataset.video);
-    video.addEventListener('error', () => {
-      URL.revokeObjectURL(video.src);
-      video.replaceWith('Видео недоступно. Откройте его в Telegram.');
-    }, {once: true});
-    button.parentElement.replaceChildren(video);
-  } catch {
-    button.textContent = 'Видео недоступно в приложении';
-  }
-}));
-
+const visibleVideos = new Set();
+const playVisible = () => {
+  visibleVideos.forEach(video => {
+    if (document.hidden || lightbox.open) video.pause();
+    else if (!video.dataset.started) {
+      video.dataset.started = 'true';
+      video.play().catch(() => { delete video.dataset.started; });
+    }
+  });
+};
+const videoObserver = new IntersectionObserver(entries => {
+  entries.forEach(({target: video, isIntersecting, intersectionRatio}) => {
+    if (!isIntersecting || intersectionRatio < .55) {
+      visibleVideos.delete(video);
+      video.pause();
+      delete video.dataset.started;
+      return;
+    }
+    visibleVideos.add(video);
+    if (!video.src) video.src = video.dataset.video;
+  });
+  playVisible();
+}, {threshold: [.55]});
+document.querySelectorAll('video[data-video]').forEach(video => {
+  video.addEventListener('loadeddata', () => video.classList.add('ready'));
+  video.addEventListener('error', () => {
+    video.parentElement.querySelector('.video-error').hidden = false;
+    video.classList.add('ready');
+  });
+  videoObserver.observe(video);
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) visibleVideos.forEach(video => { delete video.dataset.started; });
+  playVisible();
+});
+lightbox.addEventListener('close', playVisible);
 const watch = document.querySelector('#watch');
 async function watchState() {
   if (!watch) return;
@@ -440,6 +487,7 @@ class Helper:
         self.composing = False
         self.notice = ""
         self.media_cache = OrderedDict()
+        self.video_blocks = OrderedDict()
         self.jobs = {}
         self.media_slots = asyncio.Semaphore(3)
         self.sync_task = None
@@ -669,12 +717,6 @@ class Helper:
                     result = (data, "image/jpeg")
                 elif mode == kind and kind == "photo":
                     result = (await item.download_media(bytes), "image/jpeg")
-                elif mode == kind and kind == "video":
-                    video = item.video
-                    if video.size > 32 * 1024 * 1024:
-                        result = (None, "")
-                    else:
-                        result = (await item.download_media(bytes), video.mime_type)
                 else:
                     result = (None, "")
             except Exception:
@@ -684,6 +726,30 @@ class Helper:
                sum(len(data) for data, _ in self.media_cache.values() if data) > 68 * 1024 * 1024):
             self.media_cache.popitem(last=False)
         return result
+
+    async def video_document(self, message_id):
+        message = self.recent.get(message_id)
+        if message is None:
+            message = await self.client.get_messages(self.bot, ids=message_id)
+        return message.video if message and not message.out else None
+
+    async def video_block(self, document, offset):
+        cache_key = (document.id, offset)
+        cached = self.video_blocks.get(cache_key)
+        if cached is not None:
+            self.video_blocks.move_to_end(cache_key)
+            return cached
+        chunks = self.client.iter_download(document, offset=offset, limit=1,
+                                           request_size=VIDEO_BLOCK, file_size=document.size)
+        try:
+            block = bytes(await anext(chunks.__aiter__(), b""))
+        finally:
+            await chunks.close()
+        if block:
+            self.video_blocks[cache_key] = block
+            if len(self.video_blocks) > 16:
+                self.video_blocks.popitem(last=False)
+        return block
 
     async def load_media(self, message_id, mode, message=None):
         lookup = (message_id, mode)
@@ -849,12 +915,74 @@ class Page(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; "
-                         "script-src 'unsafe-inline'; img-src 'self' blob:; media-src blob:; connect-src 'self'; form-action 'self'; base-uri 'none'")
+                         "script-src 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'")
         self.send_header("X-Frame-Options", "DENY")
         if filename:
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
         self.wfile.write(body if isinstance(body, bytes) else body.encode("utf-8"))
+
+    def serve_video(self, message_id):
+        loop = get_running_loop()
+        try:
+            document = loop.run_until_complete(app.video_document(message_id))
+        except Exception:
+            return self.send("", code=503)
+        if not document or not document.size or not document.mime_type.startswith("video/"):
+            return self.send("", code=404)
+
+        total = document.size
+        range_header = self.headers.get("Range")
+        start, end = 0, total - 1
+        if range_header:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+            if match:
+                first, last = match.groups()
+                if first:
+                    start = int(first)
+                    if last:
+                        end = min(int(last), end)
+                elif last:
+                    start = max(0, total - int(last))
+                else:
+                    start = total
+            if not match or start > end or start >= total:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if first:
+                end = min(end, start + 2 * VIDEO_BLOCK - 1)
+
+        offset = start // VIDEO_BLOCK * VIDEO_BLOCK
+        try:
+            first_block = loop.run_until_complete(app.video_block(document, offset))
+            if start - offset >= len(first_block):
+                return self.send("", code=503)
+        except Exception:
+            return self.send("", code=503)
+        self.send_response(206 if range_header else 200)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Type", document.mime_type)
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Cache-Control", "no-store")
+        if range_header:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+        self.end_headers()
+        try:
+            block = first_block
+            while offset <= end:
+                begin = max(0, start - offset)
+                finish = min(len(block), end - offset + 1)
+                self.wfile.write(block[begin:finish])
+                offset += VIDEO_BLOCK
+                if offset <= end:
+                    block = loop.run_until_complete(app.video_block(document, offset))
+                    if not block:
+                        break
+        except Exception:
+            self.close_connection = True
 
     def do_GET(self):
         url = urlsplit(self.path)
@@ -939,6 +1067,8 @@ class Page(BaseHTTPRequestHandler):
                 return self.send("", code=400)
             if mode not in {"photo", "video", "thumb"} or message_id <= 0:
                 return self.send("", code=400)
+            if mode == "video":
+                return self.serve_video(message_id)
             if mode == "thumb":
                 if app.is_deleted(message_id):
                     return self.send("", code=404)
@@ -959,8 +1089,11 @@ class Page(BaseHTTPRequestHandler):
             top, group, buttons, photos, key = app.inspect(include_key=False)
             actions, ad = app.manual_actions(group, buttons, key)
             caption = "\n".join(m.raw_text for m in group)
-            content = self.gallery(top, photos)
-            content += self.profile_caption(caption) if caption else "<p>Ожидание сообщения от бота.</p>"
+            if key:
+                content = self.gallery(photos, caption)
+            else:
+                content = self.gallery(photos)
+                content += self.profile_caption(caption) if caption else "<p>Ожидание сообщения от бота.</p>"
             footer = ""
             swipe = ""
             if top and top.id != app.waiting and not app.sent(top) and not app.auto and not app.composing:
@@ -1005,8 +1138,7 @@ class Page(BaseHTTPRequestHandler):
             utilities = f"""<div class=toolbar>
 <button class=auto name=action value="{mode}" form=profile-form role=switch aria-checked="{checked}" {"disabled" if app.composing else ""}>
 Автопропуск <span class=switch aria-hidden=true></span></button>
-<a class=icon href="{BASE}" aria-label="Обновить" title="Обновить" onclick="this.closest('footer').querySelector('[value=refresh]').click();return false">{glyph("refresh")}</a>
-<button hidden form=profile-form name=action value=refresh></button>
+<button class=icon form=profile-form name=action value=refresh aria-label="Обновить" title="Обновить">{glyph("refresh")}</button>
 </div>"""
             watch = f'<span hidden id=watch data-url="{BASE}/state" data-revision="{app.current_revision()}" data-auto="{checked}"></span>' if waiting else ""
             self.send(self.page("Анкеты", f"""
@@ -1015,7 +1147,7 @@ class Page(BaseHTTPRequestHandler):
 <input type=hidden name=revision value="{app.current_revision()}">
 {notice}<section class=profile {"data-swipe-card" if swipe else ""}>{content}
 <span class=swipe-mark aria-hidden=true></span></section>{swipe}</form>{watch}""",
-                controls=utilities + footer))
+                controls=footer, header_controls=utilities))
         except Exception as exc:
             app.auto = False
             self.send(f'<meta charset=utf-8><p>{ESC(str(exc))}</p><a href="{BASE}">Попробовать снова</a>', code=503)
@@ -1035,7 +1167,7 @@ class Page(BaseHTTPRequestHandler):
                 return "".join(parts)
         return '<div class=bot-row>' + "".join(controls.values()) + '</div>'
 
-    def page(self, title, content, *, journal=False, controls=""):
+    def page(self, title, content, *, journal=False, controls="", header_controls=""):
         path = BASE + "/journal" if journal else BASE
         theme = app.db.execute("SELECT value FROM settings WHERE key = 'theme'").fetchone()
         dark = bool(theme and theme[0] == "dark")
@@ -1048,7 +1180,7 @@ class Page(BaseHTTPRequestHandler):
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>{title} — Помощник Дайвинчика</title>
 <style>{APP_CSS}</style>
-<main><header><h1>{title}</h1>{export}</header>
+<main><header><h1>{title}</h1>{header_controls}{export}</header>
 {content}</main>
 <footer id=dock>{controls}
 <div class=dock-bottom><nav aria-label="Разделы"><a href="{BASE}"{profile_active}>{glyph("people")} Анкеты</a>
@@ -1069,7 +1201,39 @@ class Page(BaseHTTPRequestHandler):
         return f'<h2 class=caption>{ESC(heading)}</h2>' + (f'<p class=caption>{ESC(detail)}</p>' if detail else "")
 
     @staticmethod
-    def gallery(top, visuals):
+    def profile_overlay(caption):
+        identity, _, description = caption.strip().partition("\n")
+        parts = re.split(r"\s+[–—-]\s+", identity, maxsplit=1)
+        identity = parts[0].strip()
+        if len(parts) > 1:
+            description = "\n".join(filter(None, (parts[1], description)))
+        parsed = re.fullmatch(r"(.+?),\s*(\d{1,3})(?:\s*,\s*(.+))?", identity)
+        title, city = identity, ""
+        if parsed:
+            name, age, city = parsed.groups()
+            title = f"{name}, {age}"
+        heading = f'<div class=profile-identity><h2>{ESC(title)}</h2>'
+        if city:
+            heading += f'<span>{ESC(city)}</span>'
+        heading += "</div>"
+        bio = f'<div class=profile-bio tabindex=0>{ESC(description)}</div>' if description else ""
+        return heading + bio
+
+    @staticmethod
+    def preview(item, media):
+        variants = getattr(media, "sizes", None) or getattr(media, "thumbs", None) or []
+        for size in variants:
+            if isinstance(size, PhotoStrippedSize):
+                try:
+                    image = base64.b64encode(utils.stripped_photo_to_jpg(size.bytes)).decode("ascii")
+                    return f'<img class=preview src="data:image/jpeg;base64,{image}" alt="" aria-hidden=true>'
+                except (ValueError, IndexError):
+                    break
+        source = f"{BASE}/media?id={item.id}&amp;kind=thumb"
+        return f'<img class=preview data-media="{source}" alt="" aria-hidden=true>'
+
+    @staticmethod
+    def gallery(visuals, caption=""):
         if not visuals:
             return ""
         items, dots = [], []
@@ -1079,16 +1243,19 @@ class Page(BaseHTTPRequestHandler):
             label = f'{"Фото" if kind == "photo" else "Видео"} {index + 1} из {count}'
             source = f"{BASE}/media?id={item.id}&amp;kind={kind}"
             if kind == "photo":
+                preview = Page.preview(item, item.photo)
                 items.append(f'<button type=button class=slide data-open aria-label="Открыть {label.lower()}">'
-                             f'<img data-media="{source}" alt="{label}" draggable=false></button>')
+                             f'{preview}<img class=original data-media="{source}" alt="{label}" draggable=false></button>')
             else:
-                poster = f"{BASE}/media?id={item.id}&amp;kind=thumb"
-                items.append(f'<div class="slide video"><img data-media="{poster}" alt="{label}">'
-                             f'<button type=button data-video="{source}">{glyph("play")} Смотреть</button></div>')
+                preview = Page.preview(item, item.video)
+                items.append(f'<div class="slide video">{preview}'
+                             f'<video data-video="{source}" aria-label="{label}" controls muted playsinline preload=none></video>'
+                             '<span class=video-error hidden>Видео недоступно</span></div>')
             state = "true" if index == 0 else "false"
             dots.append(f'<button type=button aria-label="{label}" aria-current="{state}"></button>')
         controls = f'<div class=dots aria-label="Выбор медиа">{"".join(dots)}</div>' if count > 1 else ""
-        return f'<div class=gallery><div class=slides>{"".join(items)}</div>{controls}</div>'
+        overlay = Page.profile_overlay(caption) if caption else ""
+        return f'<div class=gallery><div class=slides>{"".join(items)}</div>{overlay}{controls}</div>'
 
     def do_POST(self):
         if self.path not in {BASE, BASE + "/journal"}:

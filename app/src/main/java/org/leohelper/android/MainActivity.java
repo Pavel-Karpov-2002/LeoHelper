@@ -40,6 +40,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         panel = new WebView(this);
         panel.getSettings().setJavaScriptEnabled(true);
+        panel.getSettings().setMediaPlaybackRequiresUserGesture(false);
         panel.setWebChromeClient(new WebChromeClient());
         panel.getSettings().setAllowFileAccess(false);
         panel.getSettings().setAllowContentAccess(false);
