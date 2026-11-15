@@ -69,6 +69,7 @@ nav a[aria-current=page]{background:var(--selected);color:#fff}
 .composer{display:grid;gap:8px;margin-top:10px}
 .composer textarea{resize:vertical;width:100%;min-height:104px;padding:10px;border-radius:10px;border:1px solid var(--line);color:var(--ink);background:var(--panel);font:inherit}
 .send{background:var(--accent);color:var(--active);font-weight:650}
+.journal-sync{display:flex;align-items:center;gap:8px}.journal-sync button{padding:0 10px;font-size:14px}.journal-sync [role=status]{color:var(--muted);font-size:12px}.journal-sync [role=status] svg{animation:sync-spin 1s linear infinite;margin-right:5px}@keyframes sync-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.journal-sync [role=status] svg{animation:none}}
 .journal-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:0 0 10px}.journal-counts div{padding:7px 9px;background:var(--panel);border-radius:9px}.journal-counts dt{font-size:12px;color:var(--muted)}.journal-counts dd{margin:2px 0 0;font-size:20px;font-weight:700}.journal-counts svg{width:16px;height:16px}.journal-counts .heart{color:var(--heart)}.journal-counts .down{color:var(--accent)}
 .table-wrap{overflow-x:auto;border-radius:12px}
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -182,7 +183,12 @@ async function watchState() {
         banner.hidden = false;
         banner.textContent = state.history;
       }
-      if (journal && state.active) continue;
+      if (journal) {
+        const progress = document.querySelector("#journal-progress");
+        progress.hidden = !state.active;
+        progress.querySelector("span").textContent = state.history || "Загружаем ответы…";
+        if (state.active) continue;
+      }
       if (state.revision !== Number(watch.dataset.revision) ||
           (!journal && state.active !== (watch.dataset.auto === 'true'))) location.reload();
       if (journal) break;
@@ -390,6 +396,11 @@ class Helper:
                 buttons = [b for row in message.buttons for b in row]
                 break
         return top, group, buttons, recent
+
+    def journal_loading(self):
+        return (not self.history_ready or self.history_due is not None or
+                bool(self.history_task and not self.history_task.done()) or
+                self.synced_revision != self.revision or bool(self.sync_task and not self.sync_task.done()))
 
     def request_sync(self):
         if self.synced_revision == self.revision or self.album_pending():
@@ -698,7 +709,10 @@ class Page(BaseHTTPRequestHandler):
 <div><dt>Дизлайки</dt><dd>{glyph("down")} {disliked}</dd></div></dl>
 <div class=table-wrap><table><thead><tr><th scope=col>Анкета</th><th scope=col>Ответ</th>
 <th scope=col>При повторе</th></tr></thead><tbody>{table}</tbody></table></div>""",
-                journal=True))
+                journal=True, controls=f"""<div class=journal-sync>
+<form method=post action="{BASE}/journal"><button name=action value=refresh>{glyph("refresh")} Обновить журнал</button></form>
+<div role=status id=journal-progress{"" if app.journal_loading() else " hidden"}>{glyph("refresh")}
+<span>{ESC(app.history_status() or "Загружаем ответы…")}</span></div></div>"""))
             return
         if url.path == BASE + "/csv":
             try:
@@ -717,7 +731,7 @@ class Page(BaseHTTPRequestHandler):
             params = parse_qs(url.query)
             if "journal" in params:
                 revision = app.sync_version
-                status = not app.history_ready or app.synced_revision != app.revision or bool(app.sync_task and not app.sync_task.done())
+                status = app.journal_loading()
             else:
                 revision = app.current_revision()
                 status = app.auto
@@ -871,6 +885,8 @@ class Page(BaseHTTPRequestHandler):
                 with app.db:
                     app.db.execute("INSERT OR REPLACE INTO settings VALUES ('theme', ?)",
                                    (action.split(":")[1],))
+            elif action == "refresh":
+                app.request_history()
             elif self.path.endswith("/journal"):
                 app.auto = False
                 app.edit_journal(int(form["id"][0]), action)
@@ -993,13 +1009,3 @@ def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
