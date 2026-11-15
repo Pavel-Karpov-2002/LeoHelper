@@ -287,8 +287,10 @@ if (card) {
   const mark = card.querySelector('.swipe-mark');
   let gesture, preventClick = false, sending = false;
   card.addEventListener('pointerdown', event => {
-    if (sending || event.button !== 0 || !event.isPrimary || event.target.closest('.dots,.profile-bio') || (event.target.matches('video') && event.clientY > event.target.getBoundingClientRect().bottom - 50)) return;
+    if (sending || event.button !== 0 || !event.isPrimary) return;
     preventClick = false;
+    if (event.target.closest('.dots,.profile-bio') ||
+        (event.target.matches('video') && event.clientY > event.target.getBoundingClientRect().bottom - 50)) return;
     gesture = {id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, dragging: false};
   });
   card.addEventListener('pointermove', event => {
