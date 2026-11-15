@@ -28,6 +28,7 @@ BASE = "/" + TOKEN
 BOT = "leomatchbot"
 MESSAGE_COMMAND = "💌 📹 🎤"
 SLEEP_COMMAND = "💤"
+MAX_HISTORY_LIMIT = 1000
 ESC = html.escape
 
 APP_CSS = """
@@ -69,7 +70,7 @@ nav a[aria-current=page]{background:var(--selected);color:#fff}
 .composer{display:grid;gap:8px;margin-top:10px}
 .composer textarea{resize:vertical;width:100%;min-height:104px;padding:10px;border-radius:10px;border:1px solid var(--line);color:var(--ink);background:var(--panel);font:inherit}
 .send{background:var(--accent);color:var(--active);font-weight:650}
-.journal-sync{display:flex;align-items:center;gap:8px}.journal-sync button{padding:0 10px;font-size:14px}.journal-sync [role=status]{color:var(--muted);font-size:12px}.journal-sync [role=status] svg{animation:sync-spin 1s linear infinite;margin-right:5px}@keyframes sync-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.journal-sync [role=status] svg{animation:none}}
+.journal-sync{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.journal-sync form{display:flex;flex-wrap:wrap;align-items:center;gap:7px}.journal-sync label{font-size:12px}.journal-sync input{width:70px;min-height:44px;padding:4px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;font:inherit}.journal-sync button{padding:0 10px;font-size:14px}.journal-sync [role=status]{color:var(--muted);font-size:12px}.journal-sync [role=status] svg{animation:sync-spin 1s linear infinite;margin-right:5px}@keyframes sync-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.journal-sync [role=status] svg{animation:none}}
 .journal-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:0 0 10px}.journal-counts div{padding:7px 9px;background:var(--panel);border-radius:9px}.journal-counts dt{font-size:12px;color:var(--muted)}.journal-counts dd{margin:2px 0 0;font-size:20px;font-weight:700}.journal-counts svg{width:16px;height:16px}.journal-counts .heart{color:var(--heart)}.journal-counts .down{color:var(--accent)}
 .table-wrap{overflow-x:auto;border-radius:12px}
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -267,6 +268,9 @@ class Helper:
         self.jobs = {}
         self.media_slots = asyncio.Semaphore(3)
         self.sync_task = None
+        saved = self.db.execute("SELECT value FROM settings WHERE key = 'history_limit'").fetchone()
+        self.history_limit = int(saved[0]) if saved else 100
+        self.journal_notice = ""
         self.recent = {}
         self.deleted_updates = set()
         self.history_ready = False
@@ -312,13 +316,18 @@ class Helper:
         if message_id in self.recent and not replace:
             return
         self.recent[message_id] = message
-        if len(self.recent) > 100:
+        if len(self.recent) > max(100, self.history_limit):
             del self.recent[min(self.recent)]
         self.changed()
 
+    def set_history_limit(self, limit):
+        if not 1 <= limit <= MAX_HISTORY_LIMIT:
+            raise ValueError(f"Введите число от 1 до {MAX_HISTORY_LIMIT}.")
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO settings VALUES ('history_limit', ?)", (str(limit),))
+        self.history_limit = limit
+
     def request_history(self):
-        if self.history_task and not self.history_task.done():
-            return
         now = time.monotonic()
         due = max(self.last_history + 12, now)
         if self.history_due is None:
@@ -338,7 +347,7 @@ class Helper:
     async def refresh_history(self):
         try:
             before = self.recent.copy()
-            for message in await self.client.get_messages(self.bot, limit=100):
+            for message in await self.client.get_messages(self.bot, limit=self.history_limit, wait_time=1):
                 if self.recent.get(message.id) is before.get(message.id):
                     self.remember(message)
             self.history_ready = True
@@ -412,7 +421,7 @@ class Helper:
 
     async def sync_answers(self):
         try:
-            recent = [self.recent[key] for key in sorted(self.recent, reverse=True)]
+            recent = [self.recent[key] for key in sorted(self.recent, reverse=True)[:self.history_limit]]
             for index, answer in enumerate(recent[:-1]):
                 if not answer.out or emoji(answer.raw_text) not in {"❤", "👎"}:
                     continue
@@ -710,7 +719,11 @@ class Page(BaseHTTPRequestHandler):
 <div class=table-wrap><table><thead><tr><th scope=col>Анкета</th><th scope=col>Ответ</th>
 <th scope=col>При повторе</th></tr></thead><tbody>{table}</tbody></table></div>""",
                 journal=True, controls=f"""<div class=journal-sync>
-<form method=post action="{BASE}/journal"><button name=action value=refresh>{glyph("refresh")} Обновить журнал</button></form>
+<form method=post action="{BASE}/journal">
+<label for=history-limit>Последние сообщения</label>
+<input id=history-limit name=history_limit type=number min=1 max="{MAX_HISTORY_LIMIT}" step=1 required value="{app.history_limit}">
+<button name=action value=refresh>{glyph("refresh")} Обновить журнал</button></form>
+<p role=alert {"" if app.journal_notice else "hidden"}>{ESC(app.journal_notice)}</p>
 <div role=status id=journal-progress{"" if app.journal_loading() else " hidden"}>{glyph("refresh")}
 <span>{ESC(app.history_status() or "Загружаем ответы…")}</span></div></div>"""))
             return
@@ -886,12 +899,17 @@ class Page(BaseHTTPRequestHandler):
                     app.db.execute("INSERT OR REPLACE INTO settings VALUES ('theme', ?)",
                                    (action.split(":")[1],))
             elif action == "refresh":
-                app.request_history()
+                if self.path.endswith("/journal"):
+                    app.journal_notice = ""
+                    try:
+                        app.set_history_limit(int(form.get("history_limit", [""])[0]))
+                    except ValueError:
+                        app.journal_notice = f"Введите число от 1 до {MAX_HISTORY_LIMIT}."
+                if not self.path.endswith("/journal") or not app.journal_notice:
+                    app.request_history()
             elif self.path.endswith("/journal"):
                 app.auto = False
                 app.edit_journal(int(form["id"][0]), action)
-            elif action == "refresh":
-                app.request_history()
             elif action == "stop":
                 app.auto = False
                 app.notice = "Автопропуск выключен."
