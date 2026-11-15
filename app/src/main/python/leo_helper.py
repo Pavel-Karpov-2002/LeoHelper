@@ -112,7 +112,7 @@ header{justify-content:space-between}
 .gallery:has(.dots) .profile-bio{bottom:34px}
 .gallery:has(video) .profile-bio{bottom:48px}.gallery:has(video):has(.dots) .profile-bio{bottom:82px}
 .toolbar{flex:0 1 auto;min-width:0}.toolbar .auto{gap:5px;font-size:12px;white-space:nowrap}.toolbar .icon{min-width:34px;padding:0 4px}.toolbar .switch{width:34px;flex:none;height:22px}.toolbar .switch:after{width:14px;height:14px}.toolbar .auto[aria-checked=true] .switch:after{transform:translateX(12px)}
-[data-swipe-card]::after{content:"";position:absolute;z-index:2;inset:42% 0 0;pointer-events:none;background:linear-gradient(transparent,var(--swipe-tint,transparent));opacity:var(--swipe-glow,0);transition:opacity .16s ease}
+#dock::before{content:"";position:absolute;bottom:100%;left:50%;width:100vw;height:min(27vh,220px);transform:translateX(-50%);pointer-events:none;background:linear-gradient(to bottom,transparent,var(--swipe-tint,transparent));opacity:var(--swipe-glow,0);transition:opacity .16s ease}
 .swipe-mark{z-index:3}
 @media(prefers-reduced-motion:reduce){.profile .slide:after{animation:none!important}}
 [data-swipe-card]{position:relative;touch-action:pan-y;transform-origin:50% 85%}[data-swipe-card] .slides{overflow-x:hidden}
@@ -305,8 +305,8 @@ if (card) {
     mark.textContent = dx >= 0 ? '♥' : '×';
     const strength = Math.min(1, Math.abs(dx) / 100);
     mark.style.opacity = strength;
-    card.style.setProperty('--swipe-tint', dx > 0 ? '#28b76edb' : '#d83a42de');
-    card.style.setProperty('--swipe-glow', strength);
+    dock.style.setProperty('--swipe-tint', dx > 0 ? '#28b76edb' : '#d83a42de');
+    dock.style.setProperty('--swipe-glow', strength);
   });
   function endSwipe(event) {
     if (!gesture || gesture.id !== event.pointerId) return;
@@ -325,7 +325,7 @@ if (card) {
       card.style.transition = 'transform 150ms ease-out';
       card.style.transform = '';
       mark.textContent = '';
-      card.style.setProperty('--swipe-glow', 0);
+      dock.style.setProperty('--swipe-glow', 0);
     }
   }
   card.addEventListener('pointerup', endSwipe);
