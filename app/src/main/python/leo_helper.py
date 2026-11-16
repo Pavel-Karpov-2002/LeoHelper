@@ -477,6 +477,14 @@ class Helper:
                 caption TEXT NOT NULL, answer TEXT NOT NULL, status TEXT NOT NULL,
                 at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE INDEX IF NOT EXISTS journal_fingerprint ON journal(fingerprint, status, message_id);
+            CREATE VIEW IF NOT EXISTS journal_profiles AS
+                SELECT j.* FROM journal j
+                WHERE j.message_id = (
+                    SELECT other.message_id FROM journal other
+                    WHERE other.fingerprint = j.fingerprint
+                    ORDER BY (other.status = 'sent') DESC, other.message_id DESC LIMIT 1
+                );
             CREATE TABLE IF NOT EXISTS deleted (message_id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS preferences (fingerprint TEXT PRIMARY KEY, answer TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS thumbnails (message_id INTEGER PRIMARY KEY, image BLOB NOT NULL);
@@ -874,9 +882,9 @@ class Helper:
         key = row[0]
         with self.db:
             if action == "delete":
-                self.db.execute("INSERT OR IGNORE INTO deleted VALUES (?)", (row_id,))
-                self.db.execute("DELETE FROM thumbnails WHERE message_id = ?", (row_id,))
-                self.db.execute("DELETE FROM journal WHERE message_id = ?", (row_id,))
+                self.db.execute("INSERT OR IGNORE INTO deleted SELECT message_id FROM journal WHERE fingerprint = ?", (key,))
+                self.db.execute("DELETE FROM thumbnails WHERE message_id IN (SELECT message_id FROM journal WHERE fingerprint = ?)", (key,))
+                self.db.execute("DELETE FROM journal WHERE fingerprint = ?", (key,))
                 self.db.execute("""DELETE FROM preferences WHERE fingerprint = ?
                     AND NOT EXISTS (SELECT 1 FROM journal WHERE fingerprint = ?)""", (key, key))
             elif action in {"❤", "👎"}:
@@ -996,7 +1004,7 @@ class Page(BaseHTTPRequestHandler):
             rows = []
             total = liked = disliked = 0
             for row_id, key, caption, answer, status, date in app.db.execute(
-                    "SELECT message_id,fingerprint,caption,answer,status,at FROM journal ORDER BY message_id DESC"):
+                    "SELECT message_id,fingerprint,caption,answer,status,at FROM journal_profiles ORDER BY message_id DESC"):
                 total += 1
                 if status == "sent":
                     liked += emoji(answer) == "❤"
@@ -1047,7 +1055,7 @@ class Page(BaseHTTPRequestHandler):
             writer = csv.writer(stream)
             writer.writerow(["UTC", "Telegram ID", "Анкета", "Ответ", "Статус", "SHA-256"])
             for row in app.db.execute(
-                    "SELECT at,message_id,caption,answer,status,fingerprint FROM journal ORDER BY message_id"):
+                    "SELECT at,message_id,caption,answer,status,fingerprint FROM journal_profiles ORDER BY message_id"):
                 writer.writerow(["'" + v if isinstance(v, str) and
                                  v.lstrip().startswith(("=", "+", "-", "@")) else v for v in row])
             return self.send(stream.getvalue().encode("utf-8-sig"), "text/csv", filename="leo-journal.csv")
