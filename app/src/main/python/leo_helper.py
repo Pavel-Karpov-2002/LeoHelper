@@ -493,6 +493,11 @@ def emoji(value):
     return value.strip().replace("\ufe0f", "")
 
 
+def is_search_status(message):
+    return bool(message and not message.out and not media_kind(message) and
+                "".join(emoji(message.raw_text or "").split()) in {"✨🔍", "✨🔎", "🔍✨", "🔎✨"})
+
+
 def media_kind(message):
     if message.photo:
         return "photo"
@@ -830,6 +835,8 @@ class Helper:
         return top, group, buttons, visuals, key
 
     def actions(self, group, buttons, key):
+        if len(group) == 1 and is_search_status(group[0]):
+            return [], False
         safe = [(i, b) for i, b in enumerate(buttons)
                 if isinstance(b.button.type, (ButtonTypeDefault, InlineButtonTypeCallback))]
         if key:
@@ -1167,7 +1174,10 @@ class Page(BaseHTTPRequestHandler):
             top, group, buttons, photos, key = app.inspect(include_key=False)
             actions, _ = app.manual_actions(group, buttons, key)
             caption = "\n".join(m.raw_text for m in group)
-            if key:
+            searching = is_search_status(top)
+            if searching:
+                content = '<p role=status>Бот ищет анкету…</p>'
+            elif key:
                 content = self.gallery(photos, caption)
             else:
                 content = self.gallery(photos)
@@ -1197,12 +1207,12 @@ class Page(BaseHTTPRequestHandler):
                 message = (f'<button form=profile-form name=action value=compose aria-label="Написать сообщение">{MESSAGE_COMMAND}</button>'
                            )
                 footer += f'<div class=extras>{message}<button form=profile-form name=action value=sleep aria-label="Остановить просмотр анкет">{glyph("sleep")}</button></div>'
-            waiting = not app.composing and (app.auto or not app.history_ready or app.album_pending() or app.history_due is not None or
+            waiting = not app.composing and (searching or app.auto or not app.history_ready or app.album_pending() or app.history_due is not None or
                 bool(app.history_task and not app.history_task.done()) or
                 bool(top and (top.out or app.waiting == top.id) and time.monotonic() < app.deadline))
             mode = "stop" if app.auto else "start"
             checked = str(app.auto).lower()
-            banner = app.history_status() or app.notice
+            banner = app.history_status() or ("" if searching else app.notice)
             if key and not banner and top and app.sent(top):
                 banner = "Ответ на это сообщение уже записан. Обновите экран, чтобы проверить следующую анкету."
             if not banner and not app.history_ready:
