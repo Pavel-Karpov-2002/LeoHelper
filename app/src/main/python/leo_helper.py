@@ -117,7 +117,7 @@ header{justify-content:space-between}
 @media(prefers-reduced-motion:reduce){.profile .slide:after{animation:none!important}}
 [data-swipe-card]{position:relative;touch-action:pan-y;transform-origin:50% 85%}[data-swipe-card] .slides{overflow-x:hidden}
 .swipe-mark{position:absolute;inset:32% 0 auto;pointer-events:none;text-align:center;font-size:78px;color:white;text-shadow:0 3px 20px #111}
-.passive{margin:2px 0 8px;padding:0 9px;min-height:36px;font-size:13px}.passive[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:5px}.sr-only{position:absolute;width:1px;height:1px;min-height:0;overflow:hidden;clip-path:inset(50%);padding:0;border:0}.sr-only:focus-visible{clip-path:none;width:auto;height:44px;z-index:3}
+body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:5px}.sr-only{position:absolute;width:1px;height:1px;min-height:0;overflow:hidden;clip-path:inset(50%);padding:0;border:0}.sr-only:focus-visible{clip-path:none;width:auto;height:44px;z-index:3}
 .bot-row{display:flex;gap:5px;margin-top:6px}.bot-row button{flex:1;min-width:0;overflow-wrap:anywhere}
 .journal-counts button{padding:7px;text-align:left;background:var(--panel);font-size:12px;color:var(--muted)}.journal-counts strong{display:block;margin-top:3px;color:var(--ink);font-size:20px}.journal-counts button[aria-pressed=true]{border-color:var(--accent)}
 #journal-search{width:100%;min-height:44px;margin:0 0 10px;padding:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:10px;color:var(--ink);font:inherit}
@@ -146,7 +146,7 @@ async function mediaUrl(path) {
   for (let attempt = 0; attempt < 75; attempt++) {
     const response = await fetch(path);
     if (response.status === 202) {
-      await pause(350);
+      await pause(150);
       continue;
     }
     if (!response.ok) throw Error('Медиа недоступно');
@@ -367,17 +367,27 @@ const search = document.querySelector('#journal-search');
 if (search) {
   const filters = [...document.querySelectorAll('[data-filter]')];
   const rows = [...document.querySelectorAll('tr[data-answer]')];
-  let filter = 'all';
+  const body = document.querySelector('.table-wrap tbody');
+  const more = document.querySelector('#journal-more');
+  let filter = 'all', matches = [], shown = 0;
+  function addRows() {
+    const batch = matches.slice(shown, shown + 60);
+    body.append(...batch);
+    shown += batch.length;
+    more.hidden = shown >= matches.length;
+  }
+  more.addEventListener('click', addRows);
   function filterRows() {
     const query = search.value.trim().toLocaleLowerCase('ru');
-    let shown = 0;
-    rows.forEach(row => {
-      row.hidden = (filter !== 'all' && row.dataset.answer !== filter) ||
-          !row.dataset.caption.toLocaleLowerCase('ru').includes(query);
-      if (!row.hidden) shown++;
-    });
-    document.querySelector('#no-results').hidden = shown !== 0 || (!rows.length && !query && filter === 'all');
+    if (rows.length) body.replaceChildren();
+    matches = rows.filter(row => (filter === 'all' || row.dataset.answer === filter) &&
+        row.dataset.caption.toLocaleLowerCase('ru').includes(query));
+    shown = 0;
+    addRows();
+    document.querySelector('#no-results').hidden = matches.length !== 0 ||
+        (!rows.length && !query && filter === 'all');
   }
+  filterRows();
   search.addEventListener('input', filterRows);
   filters.forEach(button => button.addEventListener('click', () => {
     filter = button.dataset.filter;
@@ -426,7 +436,7 @@ async function watchState() {
   if (!watch) return;
   const journal = watch.dataset.journal === 'true';
   while (true) {
-    await pause(journal ? 700 : 350);
+    await pause(journal ? 700 : 180);
     try {
       const state = await (await fetch(watch.dataset.url)).json();
       const banner = document.querySelector('#status');
@@ -504,24 +514,26 @@ class Helper:
                 at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS journal_fingerprint ON journal(fingerprint, status, message_id);
-            CREATE VIEW IF NOT EXISTS journal_profiles AS
-                SELECT j.* FROM journal j
-                WHERE j.message_id = (
-                    SELECT other.message_id FROM journal other
-                    WHERE other.fingerprint = j.fingerprint
-                    ORDER BY (other.status = 'sent') DESC, other.message_id DESC LIMIT 1
-                );
+            DROP VIEW IF EXISTS journal_profiles;
+            CREATE VIEW journal_profiles AS
+                SELECT message_id, fingerprint, caption, answer, status, first_seen AS at
+                FROM (
+                    SELECT j.*,
+                        MIN(at) OVER (PARTITION BY fingerprint) AS first_seen,
+                        ROW_NUMBER() OVER (PARTITION BY fingerprint
+                            ORDER BY (status = 'sent') DESC, message_id DESC) AS rank
+                    FROM journal j
+                ) WHERE rank = 1;
+            CREATE TABLE IF NOT EXISTS auto_replies (message_id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS deleted (message_id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS preferences (fingerprint TEXT PRIMARY KEY, answer TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS thumbnails (message_id INTEGER PRIMARY KEY, image BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS ads (label TEXT PRIMARY KEY);
         """)
-        self.db.execute("INSERT OR IGNORE INTO ads VALUES (?)", ("🚀 Смотреть анкеты",))
         self.db.commit()
         self.auto = False
-        self.passive = False
-        self.passive_revision = None
+        self.auto_check = None
+        self.auto_revision = None
         self.composing = False
         self.notice = ""
         self.media_cache = OrderedDict()
@@ -576,7 +588,12 @@ class Helper:
             return
         if message_id in self.recent and not replace:
             return
+        newest = not self.recent or message_id >= max(self.recent)
         self.recent[message_id] = message
+        if newest and not message.out and media_kind(message) == "photo":
+            cached = self.media_cache.get((message_id, "photo"))
+            if not cached or not cached[0]:
+                self.schedule_media(message_id, "photo", message)
         if len(self.recent) > max(100, self.history_limit):
             del self.recent[min(self.recent)]
         self.changed()
@@ -687,7 +704,7 @@ class Helper:
                 if not answer.out or emoji(answer.raw_text) not in {"❤", "👎"}:
                     continue
                 top = recent[index + 1]
-                if top.out or not media_kind(top) or self.sent(top) or self.is_deleted(top.id):
+                if top.out or not media_kind(top) or self.sent(top) or self.is_deleted(top.id) or self.was_auto_replied(top.id):
                     continue
                 group = [top]
                 if top.grouped_id:
@@ -704,17 +721,20 @@ class Helper:
                     key = await self.profile_key(group)
                 except Exception:
                     continue
-                if self.is_deleted(top.id):
+                if self.is_deleted(top.id) or self.was_auto_replied(top.id):
                     continue
                 with self.db:
                     self.db.execute(
                         "INSERT OR IGNORE INTO journal(message_id,fingerprint,caption,answer,status,at)"
                         " VALUES (?,?,?,?,?,?)",
                         (top.id, key, "\n".join(item.raw_text for item in group), answer.raw_text,
-                         "sent", answer.date.strftime("%Y-%m-%d %H:%M:%S")))
+                         "sent", top.date.strftime("%Y-%m-%d %H:%M:%S")))
                 self.sync_version += 1
         except Exception:
             self.notice = "Не удалось сверить ответы с Telegram."
+
+    def was_auto_replied(self, message_id):
+        return self.db.execute("SELECT 1 FROM auto_replies WHERE message_id = ?", (message_id,)).fetchone()
 
     def is_deleted(self, message_id):
         return self.db.execute("SELECT 1 FROM deleted WHERE message_id = ?", (message_id,)).fetchone()
@@ -744,7 +764,7 @@ class Helper:
         lookup = (message_id, mode)
         async with self.media_slots:
             try:
-                item = message or await self.client.get_messages(self.bot, ids=message_id)
+                item = message or self.recent.get(message_id) or await self.client.get_messages(self.bot, ids=message_id)
                 kind = media_kind(item) if item else ""
                 if mode == "thumb" and kind:
                     data = await item.download_media(bytes, thumb=0)
@@ -833,18 +853,22 @@ class Helper:
         return self.db.execute("SELECT status FROM journal WHERE message_id = ?",
                                (top.id,)).fetchone()
 
-    def press(self, top, group, button, key):
-        if self.waiting == top.id or (key and self.sent(top)):
+    def press(self, top, group, button, key, *, automatic=False):
+        if self.waiting == top.id or (key and (self.sent(top) or self.was_auto_replied(top.id))):
             raise RuntimeError("Ответ для этого сообщения уже отправлялся")
         get_running_loop().run_until_complete(asyncio.sleep(0))
         latest = self.latest()
         if not latest or latest.id != top.id:
             raise RuntimeError("Чат обновился. Проверьте новое сообщение")
         text = button if isinstance(button, str) else button.text
-        if key:
+        if automatic:
+            with self.db:
+                self.db.execute("INSERT INTO auto_replies VALUES (?)", (top.id,))
+        elif key:
             self.db.execute(
-                "INSERT INTO journal(message_id,fingerprint,caption,answer,status) VALUES (?,?,?,?,?)",
-                (top.id, key, "\n".join(m.raw_text for m in group), text, "pending"))
+                "INSERT INTO journal(message_id,fingerprint,caption,answer,status,at) VALUES (?,?,?,?,?,?)",
+                (top.id, key, "\n".join(m.raw_text for m in group), text, "pending",
+                 top.date.strftime("%Y-%m-%d %H:%M:%S")))
             self.db.commit()
         self.waiting = top.id
         self.deadline = time.monotonic() + 25
@@ -854,13 +878,16 @@ class Helper:
         except FloodWaitError:
             # Telegram rejected the send before accepting any message.
             self.waiting = 0
-            if key:
+            if automatic:
+                with self.db:
+                    self.db.execute("DELETE FROM auto_replies WHERE message_id = ?", (top.id,))
+            elif key:
                 with self.db:
                     self.db.execute("DELETE FROM journal WHERE message_id = ? AND status = 'pending'", (top.id,))
             raise
         if getattr(result, "out", False):
             self.remember(result, replace=False)
-        if key:
+        if key and not automatic:
             self.db.execute("UPDATE journal SET status = 'sent' WHERE message_id = ?", (top.id,))
             self.db.commit()
 
@@ -873,7 +900,6 @@ class Helper:
                     and "".join(emoji(b.text).split()) == "".join(emoji(command).split())]
         if len(matching) > 1:
             raise RuntimeError("Бот показал несколько одинаковых кнопок")
-        self.auto = False
         if matching:
             self.press(top, group, matching[0], "")
         else:
@@ -918,40 +944,37 @@ class Helper:
             elif action in {"❤", "👎"}:
                 self.db.execute("INSERT OR REPLACE INTO preferences VALUES (?, ?)", (key, action))
 
+    async def repeat_choice(self, group):
+        key = await self.profile_key(group)
+        return key, self.choice(key)
+
     def tick(self):
-        top, group, buttons, photos, key = self.inspect(include_key=False)
-        if not (self.auto or self.passive) or self.composing:
-            return top, group, buttons, photos, key
-        if self.album_pending() or not self.history_ready or not top or top.out or self.waiting == top.id:
-            if self.auto and time.monotonic() > self.deadline:
-                self.auto = False
-                self.notice = "Автопропуск остановлен. Бот не прислал следующее сообщение."
-            return top, group, buttons, photos, key
-        if not self.auto:
-            revision = self.current_revision()
-            if self.passive_revision == revision:
-                return top, group, buttons, photos, key
-            self.passive_revision = revision
-            if not key or self.sent(top):
-                return top, group, buttons, photos, key
-        actions, ad = self.actions(group, buttons, key)
-        key = get_running_loop().run_until_complete(self.profile_key(group)) if key else ""
-        desired = self.choice(key) if key else None
-        approved = {row[0] for row in self.db.execute("SELECT label FROM ads")}
-        options = [b for _, b in actions if (desired and emoji(b.text) == emoji(desired))
-                   or (self.auto and ad and b.text in approved)]
-        if self.passive and not self.auto and desired and not options:
-            fallback = [text for action, text in self.manual_actions(group, buttons, key)[0]
-                        if action.startswith("manual:") and emoji(text) == emoji(desired)]
-            options.extend(fallback)
-        if len(options) == 1 and not self.sent(top):
-            self.press(top, group, options[0], key)
-            self.notice = "Ответ отправлен. Ждём следующее сообщение."
-        elif self.auto:
-            self.auto = False
-            self.notice = "Новая анкета. Выберите ответ." if key and not desired else (
-                "Автопропуск остановлен. Проверьте сообщение и кнопки.")
-        return top, group, buttons, photos, key
+        if not self.auto or self.composing or not self.history_ready or self.album_pending():
+            return
+        top, group, buttons, _, profile = self.inspect(include_key=False)
+        if not top or not profile or self.waiting == top.id or self.sent(top) or self.was_auto_replied(top.id):
+            return
+        revision = self.current_revision()
+        if self.auto_revision != revision:
+            if self.auto_check and not self.auto_check.done():
+                return
+            self.auto_revision = revision
+            self.auto_check = get_running_loop().create_task(self.repeat_choice(group))
+            return
+        if not self.auto_check or not self.auto_check.done():
+            return
+        check, self.auto_check = self.auto_check, None
+        key, desired = check.result()
+        if not desired:
+            return
+        controls, _ = self.manual_actions(group, buttons, key)
+        choices = [(action, label) for action, label in controls if emoji(label) == emoji(desired)]
+        if len(choices) != 1:
+            return
+        action, label = choices[0]
+        button = label if action.startswith("manual:") else buttons[int(action.split(":")[1])]
+        self.press(top, group, button, key, automatic=True)
+        self.notice = "Повтор пропущен."
 
 
 class Page(BaseHTTPRequestHandler):
@@ -1042,13 +1065,15 @@ class Page(BaseHTTPRequestHandler):
                 pass
             rows = []
             total = liked = disliked = 0
-            for row_id, key, caption, answer, status, date in app.db.execute(
-                    "SELECT message_id,fingerprint,caption,answer,status,at FROM journal_profiles ORDER BY message_id DESC"):
+            for row_id, caption, answer, status, date, choice in app.db.execute("""
+                    SELECT j.message_id, j.caption, j.answer, j.status, j.at, COALESCE(p.answer, j.answer)
+                    FROM journal_profiles j LEFT JOIN preferences p ON p.fingerprint = j.fingerprint
+                    ORDER BY j.at DESC, j.message_id DESC
+                    """):
                 total += 1
                 if status == "sent":
                     liked += emoji(answer) == "❤"
                     disliked += emoji(answer) == "👎"
-                choice = app.choice(key)
                 love_active = str(bool(choice and emoji(choice) == "❤")).lower()
                 down_active = str(bool(choice and emoji(choice) == "👎")).lower()
                 name = caption.strip().split("\n", 1)[0].split(" – ", 1)[0]
@@ -1075,7 +1100,7 @@ class Page(BaseHTTPRequestHandler):
 <input type=search id=journal-search aria-label="Поиск в журнале" placeholder="Имя, город или текст анкеты">
 <p id=no-results hidden>Анкеты не найдены.</p>
 <div class=table-wrap><table><thead><tr><th scope=col>Анкета</th><th scope=col>Ответ</th>
-<th scope=col>При повторе</th></tr></thead><tbody>{table}</tbody></table></div>""",
+<th scope=col>При повторе</th></tr></thead><tbody>{table}</tbody></table></div><button type=button id=journal-more hidden>Показать ещё</button>""",
                 journal=True, controls=f"""<div class=journal-sync>
 <form method=post action="{BASE}/journal">
 <label for=history-limit>Последние сообщения</label>
@@ -1094,7 +1119,7 @@ class Page(BaseHTTPRequestHandler):
             writer = csv.writer(stream)
             writer.writerow(["UTC", "Telegram ID", "Анкета", "Ответ", "Статус", "SHA-256"])
             for row in app.db.execute(
-                    "SELECT at,message_id,caption,answer,status,fingerprint FROM journal_profiles ORDER BY message_id"):
+                    "SELECT at,message_id,caption,answer,status,fingerprint FROM journal_profiles ORDER BY at, message_id"):
                 writer.writerow(["'" + v if isinstance(v, str) and
                                  v.lstrip().startswith(("=", "+", "-", "@")) else v for v in row])
             return self.send(stream.getvalue().encode("utf-8-sig"), "text/csv", filename="leo-journal.csv")
@@ -1136,7 +1161,7 @@ class Page(BaseHTTPRequestHandler):
         try:
             app.request_sync()
             top, group, buttons, photos, key = app.inspect(include_key=False)
-            actions, ad = app.manual_actions(group, buttons, key)
+            actions, _ = app.manual_actions(group, buttons, key)
             caption = "\n".join(m.raw_text for m in group)
             if key:
                 content = self.gallery(photos, caption)
@@ -1145,7 +1170,7 @@ class Page(BaseHTTPRequestHandler):
                 content += self.profile_caption(caption) if caption else "<p>Ожидание сообщения от бота.</p>"
             footer = ""
             swipe = ""
-            if top and top.id != app.waiting and not app.sent(top) and not app.auto and not app.composing:
+            if top and top.id != app.waiting and not app.sent(top) and not app.composing:
                 controls = {}
                 for action, label in actions:
                     reaction = emoji(label)
@@ -1158,11 +1183,6 @@ class Page(BaseHTTPRequestHandler):
                 if controls:
                     layout = self.keyboard_rows(group, buttons, controls)
                     footer += layout
-                    if ad:
-                        choices = "".join(
-                            f'<button form=profile-form name=action value="learn:{action[6:]}">{ESC(label)}</button>'
-                            for action, label in actions)
-                        footer += '<details><summary>Запомнить пропуск рекламы</summary><div class=bot-row>' + choices + '</div></details>'
             if app.composing:
                 content += """<div class=composer><label for=body>Сообщение для анкеты</label>
 <textarea id=body name=body maxlength=4096 rows=4 placeholder="Введите текст"></textarea>
@@ -1171,9 +1191,9 @@ class Page(BaseHTTPRequestHandler):
 <button class=send name=action value=send_message form=profile-form>Отправить текст</button></div>"""
             elif key and actions and top.id != app.waiting and not app.sent(top):
                 message = (f'<button form=profile-form name=action value=compose aria-label="Написать сообщение">{MESSAGE_COMMAND}</button>'
-                           if not app.auto else "")
+                           )
                 footer += f'<div class=extras>{message}<button form=profile-form name=action value=sleep aria-label="Остановить просмотр анкет">{glyph("sleep")}</button></div>'
-            waiting = not app.composing and (app.auto or app.passive or not app.history_ready or app.album_pending() or app.history_due is not None or
+            waiting = not app.composing and (app.auto or not app.history_ready or app.album_pending() or app.history_due is not None or
                 bool(app.history_task and not app.history_task.done()) or
                 bool(top and (top.out or app.waiting == top.id) and time.monotonic() < app.deadline))
             mode = "stop" if app.auto else "start"
@@ -1194,8 +1214,6 @@ class Page(BaseHTTPRequestHandler):
 <form id=profile-form method=post action="{BASE}">
 <input type=hidden name=id value="{top.id if top else 0}">
 <input type=hidden name=revision value="{app.current_revision()}">
-<button class=passive name=action value=toggle_passive aria-pressed="{str(app.passive).lower()}">
-Пассивный автопропуск: {"вкл." if app.passive else "выкл."}</button>
 {notice}<section class=profile {"data-swipe-card" if swipe else ""}>{content}
 <span class=swipe-mark aria-hidden=true></span></section>{swipe}</form>{watch}""",
                 controls=footer, header_controls=utilities))
@@ -1331,13 +1349,14 @@ class Page(BaseHTTPRequestHandler):
                 if not self.path.endswith("/journal") or not app.journal_notice:
                     app.request_history()
             elif self.path.endswith("/journal"):
-                app.auto = False
                 app.edit_journal(int(form["id"][0]), action)
-            elif action == "toggle_passive":
-                app.passive = not app.passive
-                app.passive_revision = None
+            elif action == "start":
+                if app.composing:
+                    raise RuntimeError("Завершите ввод сообщения")
+                app.auto = True
+                app.auto_revision = None
+                app.notice = "Автопропуск повторов включён."
             elif action == "stop":
-                app.passive = False
                 app.auto = False
                 app.notice = "Автопропуск выключен."
             elif action == "send_message":
@@ -1346,7 +1365,6 @@ class Page(BaseHTTPRequestHandler):
                 app.composing = False
                 app.notice = "Поле сообщения закрыто."
             elif action == "sleep":
-                app.passive = False
                 app.auto = False
                 top, group, buttons, _, key = app.inspect(include_key=False)
                 app.send_command(top, group, buttons, key, SLEEP_COMMAND)
@@ -1357,34 +1375,24 @@ class Page(BaseHTTPRequestHandler):
                         app.current_revision() != int(form["revision"][0])):
                     raise RuntimeError("Чат обновился. Проверьте новое сообщение")
                 if action == "compose":
-                    if app.auto or app.composing:
-                        raise RuntimeError("Остановите автопропуск перед отправкой сообщения")
+                    if app.composing:
+                        raise RuntimeError("Завершите ввод сообщения")
                     app.send_command(top, group, buttons, key, MESSAGE_COMMAND)
                     app.composing = True
                     app.notice = "Команда отправлена. Введите текст."
-                elif action == "start":
-                    if app.composing:
-                        raise RuntimeError("Завершите ввод сообщения")
-                    app.auto = True
-                    app.deadline = time.monotonic() + 25
-                    app.notice = "Автопропуск включён."
-                elif not app.auto and not app.composing:
+                elif not app.composing:
                     command, index = action.split(":")
                     if command == "manual":
                         controls, _ = app.manual_actions(group, buttons, key)
                         button = dict(controls)[action]
                         command = "press"
                     else:
-                        actions, ad = app.actions(group, buttons, key)
+                        actions, _ = app.actions(group, buttons, key)
                         button = dict(actions)[int(index)]
                     if command == "press":
                         key = get_running_loop().run_until_complete(app.profile_key(group)) if key else ""
                         app.press(top, group, button, key)
                         app.notice = "Ответ отправлен."
-                    elif command == "learn" and ad:
-                        app.db.execute("INSERT OR IGNORE INTO ads VALUES (?)", (button.text,))
-                        app.db.commit()
-                        app.notice = f"Кнопка «{button.text}» сохранена. Включите автопропуск для перехода."
         except Exception as exc:
             app.auto = False
             app.notice = f"Остановлено. {exc}"
@@ -1443,14 +1451,13 @@ def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_
                 app.poll_history()
                 app.request_sync()
                 now = time.monotonic()
-                if (app.auto or app.passive) and now >= next_auto:
+                if app.auto and now >= next_auto:
                     was_auto = app.auto
                     next_auto = now + 0.4
                     try:
                         app.tick()
                     except Exception as exc:
                         app.auto = False
-                        app.passive = False
                         app.notice = f"Остановлено. Проверьте чат. {exc}"
                     if was_auto and not app.auto and on_auto_stopped:
                         on_auto_stopped("Откройте приложение, чтобы продолжить просмотр.")
