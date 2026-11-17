@@ -1545,7 +1545,8 @@ def session(client, prompt, secret_prompt):
         client.disconnect()
 
 
-def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_stop=None, on_auto_stopped=None):
+def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_stop=None,
+         on_auto_stopped=None, on_auto_mode_changed=None, consume_auto_stop=None):
     global app, ROOT
     if data_dir is not None:
         ROOT = Path(data_dir) / "leo-helper"
@@ -1571,13 +1572,21 @@ def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_
         with video_http(app), HTTPServer(("127.0.0.1", 0 if on_ready else 8765), Page) as server:
             server.timeout = 0.08
             next_auto = 0
+            reported_auto = False
             url = f"http://127.0.0.1:{server.server_port}{BASE}"
             if on_ready:
                 on_ready(url)
             else:
                 print(f"Откройте на этом телефоне {url}", flush=True)
             while should_stop is None or not should_stop():
+                if consume_auto_stop and consume_auto_stop():
+                    app.auto = False
+                    app.notice = "Автопропуск выключен."
                 server.handle_request()
+                if app.auto != reported_auto:
+                    reported_auto = app.auto
+                    if on_auto_mode_changed:
+                        on_auto_mode_changed(reported_auto)
                 app.poll_history()
                 app.request_sync()
                 now = time.monotonic()

@@ -2,16 +2,15 @@ package org.leohelper.android;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.app.AlertDialog;
+import android.content.ComponentName;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.text.InputType;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -19,8 +18,6 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.Toast;
-
-import com.chaquo.python.Python;
 
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -31,10 +28,21 @@ import java.util.concurrent.CountDownLatch;
 public final class MainActivity extends Activity {
     private static final int SAVE_CSV = 1;
     private static final int NOTIFICATION_PERMISSION = 2;
-    private static final String AUTO_CHANNEL = "auto_skip";
     private WebView panel;
     private String baseUrl;
     private volatile boolean closing;
+    private boolean bound;
+    private HelperService helper;
+    private final ServiceConnection connection = new ServiceConnection() {
+        @Override public void onServiceConnected(ComponentName name, IBinder binder) {
+            helper = ((HelperService.LocalBinder) binder).service();
+            helper.attach(MainActivity.this);
+        }
+        @Override public void onServiceDisconnected(ComponentName name) {
+            helper = null;
+            baseUrl = null;
+        }
+    };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -61,7 +69,8 @@ public final class MainActivity extends Activity {
         });
         setContentView(panel);
         prepareNotifications();
-        startHelper();
+        panel.loadData("<meta charset=utf-8><p>Подключение к Telegram…</p>", "text/html", "UTF-8");
+        bound = bindService(new Intent(this, HelperService.class), connection, BIND_AUTO_CREATE);
     }
 
     @Override protected void onResume() {
@@ -73,10 +82,6 @@ public final class MainActivity extends Activity {
     }
 
     private void prepareNotifications() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            getSystemService(NotificationManager.class).createNotificationChannel(
-                new NotificationChannel(AUTO_CHANNEL, "Автопропуск", NotificationManager.IMPORTANCE_DEFAULT));
-        }
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
             !getPreferences(MODE_PRIVATE).getBoolean("notificationsAsked", false)) {
@@ -85,47 +90,14 @@ public final class MainActivity extends Activity {
         }
     }
 
-    public void notifyAutoStopped(String reason) {
-        runOnUiThread(() -> {
-            if (closing || (Build.VERSION.SDK_INT >= 33 &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)) return;
-            Intent intent = new Intent(this, MainActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            PendingIntent open = PendingIntent.getActivity(this, 0, intent,
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-            Notification.Builder notification = Build.VERSION.SDK_INT >= 26
-                ? new Notification.Builder(this, AUTO_CHANNEL) : new Notification.Builder(this);
-            getSystemService(NotificationManager.class).notify(1, notification
-                .setSmallIcon(R.drawable.leo_notification)
-                .setContentTitle("Автопропуск остановился")
-                .setContentText(reason)
-                .setContentIntent(open)
-                .setVisibility(Notification.VISIBILITY_PRIVATE)
-                .setAutoCancel(true)
-                .build());
-        });
-    }
-
-    private void startHelper() {
-        panel.loadData("<meta charset=utf-8><p>Подключение к Telegram…</p>", "text/html", "UTF-8");
-        new Thread(() -> {
-            try {
-                Python.getInstance().getModule("android_entry")
-                    .callAttr("run", this, getFilesDir().getAbsolutePath());
-            } catch (Exception error) {
-                runOnUiThread(() -> {
-                    if (closing) return;
-                    new AlertDialog.Builder(this).setTitle("Не удалось запустить помощник")
-                        .setMessage(error.getMessage())
-                        .setPositiveButton("Повторить", (dialog, which) -> startHelper())
-                        .setNegativeButton("Закрыть", (dialog, which) -> finish()).show();
-                });
-            }
-        }, "leo-helper").start();
-    }
-
-    public boolean isClosing() {
-        return closing;
+    void showHelperError(String reason) {
+        if (closing) return;
+        new AlertDialog.Builder(this).setTitle("Не удалось запустить помощник")
+            .setMessage(reason)
+            .setPositiveButton("Повторить", (dialog, which) -> {
+                if (helper != null) helper.startWorker();
+            })
+            .setNegativeButton("Закрыть", (dialog, which) -> finish()).show();
     }
 
     public void ready(String url) {
@@ -185,7 +157,7 @@ public final class MainActivity extends Activity {
         }, "leo-export").start();
     }
 
-    private void showToast(String text) {
+    void showToast(String text) {
         runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
     }
 
@@ -200,6 +172,8 @@ public final class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         closing = true;
+        if (helper != null) helper.detach(this);
+        if (bound) unbindService(connection);
         panel.destroy();
         super.onDestroy();
     }

@@ -14,6 +14,8 @@ def run(activity, data_dir):
             data_dir=data_dir,
             should_stop=activity.isClosing,
             on_auto_stopped=activity.notifyAutoStopped,
+            on_auto_mode_changed=activity.autoModeChanged,
+            consume_auto_stop=activity.consumeStop,
         )
     finally:
         loop.close()

@@ -1,10 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <application android:name="com.chaquo.python.android.PyApplication"
                  android:icon="@mipmap/leo_icon" android:roundIcon="@mipmap/leo_icon" android:allowBackup="false" android:label="Помощник Дайвинчика"
                  android:networkSecurityConfig="@xml/network_security"
                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <service android:name=".HelperService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                      android:value="User-enabled duplicate profile handling in a Telegram chat while Telegram is open" />
+        </service>
         <activity android:name=".MainActivity" android:exported="true"
                   android:configChanges="keyboardHidden|orientation|screenSize">
             <intent-filter>
