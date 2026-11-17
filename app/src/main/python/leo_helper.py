@@ -1089,13 +1089,13 @@ class Page(BaseHTTPRequestHandler):
                     ORDER BY j.at DESC, j.message_id DESC
                     """):
                 total += 1
-                if status == "sent":
-                    liked += emoji(answer) == "❤"
-                    disliked += emoji(answer) == "👎"
+                reaction = emoji(choice) if status == "sent" else ""
+                liked += reaction == "❤"
+                disliked += reaction == "👎"
                 love_active = str(bool(choice and emoji(choice) == "❤")).lower()
                 down_active = str(bool(choice and emoji(choice) == "👎")).lower()
                 name = caption.strip().split("\n", 1)[0].split(" – ", 1)[0]
-                category = {"❤": "liked", "👎": "disliked"}.get(emoji(answer), "") if status == "sent" else ""
+                category = {"❤": "liked", "👎": "disliked"}.get(reaction, "")
                 rows.append(f"""<tr data-answer="{category}" data-caption="{ESC(caption)}"><td><div class=person><button class=avatar type=button data-open aria-label="Открыть фото анкеты">
 <img data-media="{BASE}/media?id={row_id}&amp;kind=thumb" alt=""></button>
 <div class=person-text><strong title="{ESC(caption)}">{ESC(name)}</strong><small>{ESC(date[5:16])}</small></div></div></td>
