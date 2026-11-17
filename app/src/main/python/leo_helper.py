@@ -12,7 +12,8 @@ from pathlib import Path
 import secrets
 import sqlite3
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from contextlib import contextmanager
 from urllib.parse import parse_qs, urlsplit
 
@@ -31,7 +32,7 @@ BOT = "leomatchbot"
 MESSAGE_COMMAND = "💌 📹 🎤"
 SLEEP_COMMAND = "💤"
 MAX_HISTORY_LIMIT = 1000
-VIDEO_BLOCK = 512 * 1024
+VIDEO_BLOCK = 256 * 1024
 ESC = html.escape
 
 APP_CSS = """
@@ -118,6 +119,7 @@ header{justify-content:space-between}
 .toolbar{flex:0 1 auto;min-width:0}.toolbar .auto{gap:5px;font-size:12px;white-space:nowrap}.toolbar .icon{min-width:34px;padding:0 4px}.toolbar .switch{width:34px;flex:none;height:22px}.toolbar .switch:after{width:14px;height:14px}.toolbar .auto[aria-checked=true] .switch:after{transform:translateX(12px)}
 #dock::before{content:"";position:absolute;bottom:100%;left:50%;width:100vw;height:74px;transform:translateX(-50%);pointer-events:none;background:linear-gradient(to bottom,transparent,color-mix(in srgb,var(--swipe-tint,transparent) 43%,transparent) calc(100% - 3px),var(--swipe-tint,transparent) calc(100% - 3px));opacity:var(--swipe-glow,0);transition:opacity .16s ease}
 .like-pop{position:fixed;inset:0;z-index:4;display:grid;place-items:center;pointer-events:none;color:#31b67d}
+.auto-pop{position:fixed;inset:0;z-index:4;display:grid;place-items:center;pointer-events:none;color:#fff}.auto-pop svg{width:68px;height:68px;padding:12px;border-radius:50%;background:#202e28bd;animation:auto-arrow .5s both}@keyframes auto-arrow{0%{opacity:0;transform:translateX(-24px) scale(.85)}32%{opacity:1;transform:translateX(0) scale(1)}64%{opacity:1}100%{opacity:0;transform:translateX(34px)}}@media(prefers-reduced-motion:reduce){.auto-pop svg{animation:heart-static .3s both}}
 .like-pop[hidden]{display:none}.like-pop svg{width:82px;height:82px;filter:drop-shadow(0 5px 12px #18242169);animation:heart-hop .48s both}
 @keyframes heart-hop{0%{opacity:0;transform:translateY(15px) scale(.45)}30%{opacity:1;transform:translateY(-20px) scale(1.19)}51%{transform:translateY(2px) scale(.95)}69%{transform:translateY(-5px) scale(1.04)}85%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-7px)}}
 @media(prefers-reduced-motion:reduce){.like-pop svg{animation:heart-static .24s both}@keyframes heart-static{0%,100%{opacity:0}20%,80%{opacity:1}}}
@@ -398,6 +400,13 @@ if (card) {
     const action = document.querySelector('[data-swipe="' + direction + '"]');
     if (event.type === 'pointerup' && action && Math.abs(dx) >= Math.max(68, innerWidth * .22)) {
       sending = true;
+      card.querySelectorAll('video[data-video]').forEach(video => {
+        videoObserver.unobserve(video);
+        visibleVideos.delete(video);
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      });
       card.style.transition = 'transform 140ms ease-out';
       card.style.transform = 'translateX(' + (dx > 0 ? '115vw' : '-115vw') + ') rotate(' + (dx > 0 ? 13 : -13) + 'deg)';
       let delay = 145;
@@ -520,6 +529,7 @@ watchState();
 ICON_PATHS = {
     "heart": '<path fill="currentColor" stroke="none" d="M12 21 3.9 13a5 5 0 0 1 7.1-7.1l1 1 1-1a5 5 0 0 1 7.1 7.1Z"/>',
     "down": '<path fill="currentColor" stroke="none" d="M15 3H7c-1 0-1.7.6-2 1.5l-2 6A2 2 0 0 0 5 13h5l-.8 4.5a2 2 0 0 0 3.4 1.8L17 13V5a2 2 0 0 0-2-2Zm4 0h3v10h-3z"/>',
+    "auto-arrow": '<path d="M4 12h12m-5-5 5 5-5 5m9-10v10"/>',
     "cards": '<path d="m10 4 9 2a2 2 0 0 1 1.5 2.4l-1.8 8.1"/><rect x="4" y="7" width="12" height="13" rx="2" transform="rotate(-10 10 13.5)"/>',
     "people": '<circle cx="9" cy="7" r="3"/><path d="M2 20v-2a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v2ZM16 4a3 3 0 0 1 0 6m2 3a5 5 0 0 1 4 5v2"/>',
     "list": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h10M7 16h7"/>',
@@ -596,12 +606,14 @@ class Helper:
         """)
         self.db.commit()
         self.auto = False
+        self.auto_feedback_until = 0
         self.auto_check = None
         self.auto_revision = None
         self.composing = False
         self.notice = ""
         self.media_cache = OrderedDict()
         self.video_blocks = OrderedDict()
+        self.video_origin = ''
         self.jobs = {}
         self.media_slots = asyncio.Semaphore(3)
         self.sync_task = None
@@ -1041,6 +1053,7 @@ class Helper:
         button = label if action.startswith("manual:") else buttons[int(action.split(":")[1])]
         self.press(top, group, button, key, automatic=True)
         self.notice = "Повтор пропущен."
+        self.auto_feedback_until = time.monotonic() + 4
 
 
 class Page(BaseHTTPRequestHandler):
@@ -1053,74 +1066,13 @@ class Page(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; "
-                         "script-src 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'")
+                         f"script-src 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' {app.video_origin}; "
+                         "connect-src 'self'; form-action 'self'; base-uri 'none'")
         self.send_header("X-Frame-Options", "DENY")
         if filename:
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
         self.wfile.write(body if isinstance(body, bytes) else body.encode("utf-8"))
-
-    def serve_video(self, message_id):
-        loop = get_running_loop()
-        try:
-            document = loop.run_until_complete(app.video_document(message_id))
-        except Exception:
-            return self.send("", code=503)
-        if not document or not document.size or not document.mime_type.startswith("video/"):
-            return self.send("", code=404)
-
-        total = document.size
-        range_header = self.headers.get("Range")
-        start, end = 0, total - 1
-        if range_header:
-            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
-            if match:
-                first, last = match.groups()
-                if first:
-                    start = int(first)
-                    if last:
-                        end = min(int(last), end)
-                elif last:
-                    start = max(0, total - int(last))
-                else:
-                    start = total
-            if not match or start > end or start >= total:
-                self.send_response(416)
-                self.send_header("Content-Range", f"bytes */{total}")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            if first:
-                end = min(end, start + 2 * VIDEO_BLOCK - 1)
-
-        offset = start // VIDEO_BLOCK * VIDEO_BLOCK
-        try:
-            first_block = loop.run_until_complete(app.video_block(document, offset))
-            if start - offset >= len(first_block):
-                return self.send("", code=503)
-        except Exception:
-            return self.send("", code=503)
-        self.send_response(206 if range_header else 200)
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Content-Type", document.mime_type)
-        self.send_header("Content-Length", str(end - start + 1))
-        self.send_header("Cache-Control", "no-store")
-        if range_header:
-            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
-        self.end_headers()
-        try:
-            block = first_block
-            while offset <= end:
-                begin = max(0, start - offset)
-                finish = min(len(block), end - offset + 1)
-                self.wfile.write(block[begin:finish])
-                offset += VIDEO_BLOCK
-                if offset <= end:
-                    block = loop.run_until_complete(app.video_block(document, offset))
-                    if not block:
-                        break
-        except Exception:
-            self.close_connection = True
 
     def do_GET(self):
         url = urlsplit(self.path)
@@ -1205,10 +1157,8 @@ class Page(BaseHTTPRequestHandler):
                 mode = params["kind"][0]
             except (KeyError, ValueError):
                 return self.send("", code=400)
-            if mode not in {"photo", "video", "thumb"} or message_id <= 0:
+            if mode not in {"photo", "thumb"} or message_id <= 0:
                 return self.send("", code=400)
-            if mode == "video":
-                return self.serve_video(message_id)
             if mode == "thumb":
                 if app.is_deleted(message_id):
                     return self.send("", code=404)
@@ -1279,7 +1229,12 @@ class Page(BaseHTTPRequestHandler):
 <button class=icon form=profile-form name=action value=refresh aria-label="Обновить" title="Обновить">{glyph("refresh")}</button>
 </div>"""
             watch = f'<span hidden id=watch data-url="{BASE}/state" data-revision="{app.current_revision()}" data-auto="{checked}"></span>' if waiting else ""
+            feedback = ""
+            if key and time.monotonic() < app.auto_feedback_until:
+                app.auto_feedback_until = 0
+                feedback = f'<div class=auto-pop aria-hidden=true>{glyph("auto-arrow")}</div>'
             self.send(self.page("Анкеты", f"""
+{feedback}
 <form id=profile-form method=post action="{BASE}">
 <input type=hidden name=id value="{top.id if top else 0}">
 <input type=hidden name=revision value="{app.current_revision()}">
@@ -1385,9 +1340,10 @@ class Page(BaseHTTPRequestHandler):
                 items.append(f'<button type=button class=slide data-open aria-label="Открыть {label.lower()}">'
                              f'{preview}<img class=original data-media="{source}" alt="{label}" draggable=false></button>')
             else:
+                source = f"{app.video_origin}{BASE}/video?id={item.id}"
                 preview = Page.preview(item, item.video)
                 items.append(f'<div class="slide video">{preview}'
-                             f'<video data-video="{source}" aria-label="{label}" controls muted playsinline preload=none></video>'
+                             f'<video data-video="{source}" aria-label="{label}" controls muted playsinline preload=metadata></video>'
                              '<span class=video-error hidden>Видео недоступно</span></div>')
             state = "true" if index == 0 else "false"
             video_icon = glyph("play") if kind == "video" else ""
@@ -1470,6 +1426,111 @@ class Page(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+class VideoPage(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def send(self, _, *, code):
+        self.send_response(code)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self):
+        url = urlsplit(self.path)
+        if url.path != BASE + "/video":
+            return self.send("", code=404)
+        try:
+            message_id = int(parse_qs(url.query)["id"][0])
+        except (KeyError, ValueError):
+            return self.send("", code=400)
+        if message_id <= 0:
+            return self.send("", code=400)
+        self.serve_video(message_id)
+
+    def telegram_result(self, coroutine):
+        pending = asyncio.run_coroutine_threadsafe(coroutine, self.server.telegram_loop)
+        try:
+            return pending.result(timeout=25)
+        finally:
+            if not pending.done():
+                pending.cancel()
+
+    def serve_video(self, message_id):
+        try:
+            document = self.telegram_result(self.server.helper.video_document(message_id))
+        except Exception:
+            return self.send("", code=503)
+        if not document or not document.size or not document.mime_type.startswith("video/"):
+            return self.send("", code=404)
+
+        total = document.size
+        range_header = self.headers.get("Range")
+        start, end = 0, total - 1
+        if range_header:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+            if match:
+                first, last = match.groups()
+                if first:
+                    start = int(first)
+                    if last:
+                        end = min(int(last), end)
+                elif last:
+                    start = max(0, total - int(last))
+                else:
+                    start = total
+            if not match or start > end or start >= total:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if first:
+                end = min(end, start + 4 * VIDEO_BLOCK - 1)
+
+        offset = start // VIDEO_BLOCK * VIDEO_BLOCK
+        try:
+            first_block = self.telegram_result(self.server.helper.video_block(document, offset))
+            if start - offset >= len(first_block):
+                return self.send("", code=503)
+        except Exception:
+            return self.send("", code=503)
+        self.send_response(206 if range_header else 200)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Type", document.mime_type)
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Cache-Control", "no-store")
+        if range_header:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+        self.end_headers()
+        try:
+            block = first_block
+            while offset <= end:
+                begin = max(0, start - offset)
+                finish = min(len(block), end - offset + 1)
+                self.wfile.write(block[begin:finish])
+                offset += VIDEO_BLOCK
+                if offset <= end:
+                    block = self.telegram_result(self.server.helper.video_block(document, offset))
+                    if not block:
+                        break
+        except Exception:
+            self.close_connection = True
+
+@contextmanager
+def video_http(helper):
+    with ThreadingHTTPServer(("127.0.0.1", 0), VideoPage) as server:
+        server.telegram_loop = get_running_loop()
+        server.helper = helper
+        helper.video_origin = f"http://127.0.0.1:{server.server_port}"
+        thread = Thread(target=lambda: server.serve_forever(poll_interval=0.1), daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            server.shutdown()
+            thread.join()
+
+
 @contextmanager
 def session(client, prompt, secret_prompt):
     try:
@@ -1507,7 +1568,7 @@ def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_
         app = Helper(client, bot)
         app.subscribe()
         app.request_history()
-        with HTTPServer(("127.0.0.1", 0 if on_ready else 8765), Page) as server:
+        with video_http(app), HTTPServer(("127.0.0.1", 0 if on_ready else 8765), Page) as server:
             server.timeout = 0.08
             next_auto = 0
             url = f"http://127.0.0.1:{server.server_port}{BASE}"
