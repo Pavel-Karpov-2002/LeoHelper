@@ -117,7 +117,7 @@ header{justify-content:space-between}
 @media(prefers-reduced-motion:reduce){.profile .slide:after{animation:none!important}}
 [data-swipe-card]{position:relative;touch-action:pan-y;transform-origin:50% 85%}[data-swipe-card] .slides{overflow-x:hidden}
 .swipe-mark{position:absolute;inset:32% 0 auto;pointer-events:none;text-align:center;font-size:78px;color:white;text-shadow:0 3px 20px #111}
-body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:5px}.sr-only{position:absolute;width:1px;height:1px;min-height:0;overflow:hidden;clip-path:inset(50%);padding:0;border:0}.sr-only:focus-visible{clip-path:none;width:auto;height:44px;z-index:3}
+.passive{margin:2px 0 8px;padding:0 9px;min-height:36px;font-size:13px}.passive[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:5px}.sr-only{position:absolute;width:1px;height:1px;min-height:0;overflow:hidden;clip-path:inset(50%);padding:0;border:0}.sr-only:focus-visible{clip-path:none;width:auto;height:44px;z-index:3}
 .bot-row{display:flex;gap:5px;margin-top:6px}.bot-row button{flex:1;min-width:0;overflow-wrap:anywhere}
 .journal-counts button{padding:7px;text-align:left;background:var(--panel);font-size:12px;color:var(--muted)}.journal-counts strong{display:block;margin-top:3px;color:var(--ink);font-size:20px}.journal-counts button[aria-pressed=true]{border-color:var(--accent)}
 #journal-search{width:100%;min-height:44px;margin:0 0 10px;padding:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:10px;color:var(--ink);font:inherit}
@@ -230,10 +230,15 @@ document.querySelectorAll('[data-open]').forEach(button => button.addEventListen
 }));
 zoom.addEventListener('pointerdown', event => {
   zoom.setPointerCapture(event.pointerId);
-  fingers.set(event.pointerId, {x: event.clientX, y: event.clientY, moved: fingers.size > 0});
+  const horizontalBound = zoom.clientWidth * (scale - 1) / 2;
+  const verticalBound = zoom.clientHeight * (scale - 1) / 2;
+  fingers.set(event.pointerId, {x: event.clientX, y: event.clientY, startX: event.clientX,
+    startY: event.clientY, edge: Math.abs(offsetX) >= horizontalBound - 2,
+    top: offsetY >= verticalBound - 2, moved: fingers.size > 0});
+
   if (fingers.size === 2) {
     const [a, b] = [...fingers.values()];
-    a.moved = b.moved = true;
+    a.moved = b.moved = a.pinched = b.pinched = true;
     pinchStart = {distance: Math.hypot(a.x - b.x, a.y - b.y), scale,
                   x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, offsetX, offsetY};
   }
@@ -251,6 +256,10 @@ zoom.addEventListener('pointermove', event => {
     scale = Math.max(1, Math.min(5, pinchStart.scale * Math.hypot(a.x - b.x, a.y - b.y) / Math.max(1, pinchStart.distance)));
     offsetX = pinchStart.offsetX + (a.x + b.x) / 2 - pinchStart.x;
     offsetY = pinchStart.offsetY + (a.y + b.y) / 2 - pinchStart.y;
+  } else if (!finger.pinched && finger.top && event.clientY - finger.startY > 12 &&
+             event.clientY - finger.startY > Math.abs(event.clientX - finger.startX) * 1.3) {
+    zoom.style.transform = 'translateY(' + (event.clientY - finger.startY) + 'px)';
+    finger.dismiss = true;
   } else if (fingers.size === 1 && scale > 1) {
     offsetX += dx;
     offsetY += dy;
@@ -261,7 +270,22 @@ function finishZoom(event) {
   const finger = fingers.get(event.pointerId);
   fingers.delete(event.pointerId);
   pinchStart = null;
-  if (!finger || finger.moved || event.type !== 'pointerup') return;
+  if (!finger) return;
+  const dx = event.clientX - finger.startX, dy = event.clientY - finger.startY;
+  if (event.type === 'pointerup' && !finger.pinched && finger.dismiss && dy > 85 && dy > Math.abs(dx) * 1.25) {
+    zoom.style.transition = 'transform 190ms ease-in';
+    zoom.style.transform = 'translateY(100vh)';
+    setTimeout(() => { if (lightbox.open) lightbox.close(); }, 190);
+    return;
+  }
+  zoom.style.transition = '';
+  zoom.style.transform = '';
+  if (event.type !== 'pointerup' || finger.pinched) return;
+  if (finger.moved) {
+    if (!finger.dismiss && finger.edge && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.25)
+      showPhoto(currentPhoto + (dx < 0 ? 1 : -1));
+    return;
+  }
   const box = zoom.getBoundingClientRect();
   const part = (event.clientX - box.left) / box.width;
   if (part < .25) showPhoto(currentPhoto - 1);
@@ -276,6 +300,8 @@ zoom.addEventListener('pointercancel', finishZoom);
 lightbox.querySelector('button').addEventListener('click', () => lightbox.close());
 lightbox.addEventListener('close', () => {
   opened++;
+  zoom.style.transition = "";
+  zoom.style.transform = "";
   fingers.clear();
   const url = full.src;
   if (url.startsWith('blob:') && ![...document.images].some(img => img !== full && img.src === url)) URL.revokeObjectURL(url);
@@ -494,6 +520,8 @@ class Helper:
         self.db.execute("INSERT OR IGNORE INTO ads VALUES (?)", ("🚀 Смотреть анкеты",))
         self.db.commit()
         self.auto = False
+        self.passive = False
+        self.passive_revision = None
         self.composing = False
         self.notice = ""
         self.media_cache = OrderedDict()
@@ -892,23 +920,34 @@ class Helper:
 
     def tick(self):
         top, group, buttons, photos, key = self.inspect(include_key=False)
-        if not self.auto:
+        if not (self.auto or self.passive) or self.composing:
             return top, group, buttons, photos, key
         if self.album_pending() or not self.history_ready or not top or top.out or self.waiting == top.id:
-            if time.monotonic() > self.deadline:
+            if self.auto and time.monotonic() > self.deadline:
                 self.auto = False
                 self.notice = "Автопропуск остановлен. Бот не прислал следующее сообщение."
             return top, group, buttons, photos, key
+        if not self.auto:
+            revision = self.current_revision()
+            if self.passive_revision == revision:
+                return top, group, buttons, photos, key
+            self.passive_revision = revision
+            if not key or self.sent(top):
+                return top, group, buttons, photos, key
         actions, ad = self.actions(group, buttons, key)
         key = get_running_loop().run_until_complete(self.profile_key(group)) if key else ""
         desired = self.choice(key) if key else None
         approved = {row[0] for row in self.db.execute("SELECT label FROM ads")}
         options = [b for _, b in actions if (desired and emoji(b.text) == emoji(desired))
-                   or (ad and b.text in approved)]
+                   or (self.auto and ad and b.text in approved)]
+        if self.passive and not self.auto and desired and not options:
+            fallback = [text for action, text in self.manual_actions(group, buttons, key)[0]
+                        if action.startswith("manual:") and emoji(text) == emoji(desired)]
+            options.extend(fallback)
         if len(options) == 1 and not self.sent(top):
             self.press(top, group, options[0], key)
             self.notice = "Ответ отправлен. Ждём следующее сообщение."
-        else:
+        elif self.auto:
             self.auto = False
             self.notice = "Новая анкета. Выберите ответ." if key and not desired else (
                 "Автопропуск остановлен. Проверьте сообщение и кнопки.")
@@ -1134,7 +1173,7 @@ class Page(BaseHTTPRequestHandler):
                 message = (f'<button form=profile-form name=action value=compose aria-label="Написать сообщение">{MESSAGE_COMMAND}</button>'
                            if not app.auto else "")
                 footer += f'<div class=extras>{message}<button form=profile-form name=action value=sleep aria-label="Остановить просмотр анкет">{glyph("sleep")}</button></div>'
-            waiting = not app.composing and (app.auto or not app.history_ready or app.album_pending() or app.history_due is not None or
+            waiting = not app.composing and (app.auto or app.passive or not app.history_ready or app.album_pending() or app.history_due is not None or
                 bool(app.history_task and not app.history_task.done()) or
                 bool(top and (top.out or app.waiting == top.id) and time.monotonic() < app.deadline))
             mode = "stop" if app.auto else "start"
@@ -1155,6 +1194,8 @@ class Page(BaseHTTPRequestHandler):
 <form id=profile-form method=post action="{BASE}">
 <input type=hidden name=id value="{top.id if top else 0}">
 <input type=hidden name=revision value="{app.current_revision()}">
+<button class=passive name=action value=toggle_passive aria-pressed="{str(app.passive).lower()}">
+Пассивный автопропуск: {"вкл." if app.passive else "выкл."}</button>
 {notice}<section class=profile {"data-swipe-card" if swipe else ""}>{content}
 <span class=swipe-mark aria-hidden=true></span></section>{swipe}</form>{watch}""",
                 controls=footer, header_controls=utilities))
@@ -1292,7 +1333,11 @@ class Page(BaseHTTPRequestHandler):
             elif self.path.endswith("/journal"):
                 app.auto = False
                 app.edit_journal(int(form["id"][0]), action)
+            elif action == "toggle_passive":
+                app.passive = not app.passive
+                app.passive_revision = None
             elif action == "stop":
+                app.passive = False
                 app.auto = False
                 app.notice = "Автопропуск выключен."
             elif action == "send_message":
@@ -1301,6 +1346,7 @@ class Page(BaseHTTPRequestHandler):
                 app.composing = False
                 app.notice = "Поле сообщения закрыто."
             elif action == "sleep":
+                app.passive = False
                 app.auto = False
                 top, group, buttons, _, key = app.inspect(include_key=False)
                 app.send_command(top, group, buttons, key, SLEEP_COMMAND)
@@ -1397,14 +1443,16 @@ def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_
                 app.poll_history()
                 app.request_sync()
                 now = time.monotonic()
-                if app.auto and now >= next_auto:
+                if (app.auto or app.passive) and now >= next_auto:
+                    was_auto = app.auto
                     next_auto = now + 0.4
                     try:
                         app.tick()
                     except Exception as exc:
                         app.auto = False
+                        app.passive = False
                         app.notice = f"Остановлено. Проверьте чат. {exc}"
-                    if not app.auto and on_auto_stopped:
+                    if was_auto and not app.auto and on_auto_stopped:
                         on_auto_stopped("Откройте приложение, чтобы продолжить просмотр.")
                 get_running_loop().run_until_complete(asyncio.sleep(0.015))
 
