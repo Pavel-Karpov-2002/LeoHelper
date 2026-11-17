@@ -35,8 +35,8 @@ VIDEO_BLOCK = 512 * 1024
 ESC = html.escape
 
 APP_CSS = """
-:root{color-scheme:light;--bg:#eef3fc;--panel:#fff;--control:#e0eafa;--ink:#17213b;--muted:#485d7c;--line:#c4d2e8;--accent:#2355ad;--active:#fff;--heart:#a43d57;--selected:#2355ad}
-[data-theme=dark]{color-scheme:dark;--bg:#141a34;--panel:#202846;--control:#293555;--ink:#f3f5ff;--muted:#b6c1dc;--line:#435276;--accent:#a4ceff;--active:#102748;--heart:#feb394;--selected:#205ddd}
+:root{color-scheme:light;--bg:#f5f2e7;--panel:#e9e6d8;--control:#e2e5d8;--ink:#202e28;--muted:#535d57;--line:#bfc4b9;--accent:#3b6855;--active:#fff;--heart:#24834d;--selected:#3b6855}
+[data-theme=dark]{color-scheme:dark;--bg:#302d28;--panel:#403c33;--control:#494539;--ink:#f2ead6;--muted:#d4cbb8;--line:#696552;--accent:#cfe49d;--active:#27301d;--heart:#8fdfa9;--selected:#587342}
 *{box-sizing:border-box} body{margin:0 auto;max-width:42rem;background:var(--bg);color:var(--ink);font:16px/1.4 Roboto,system-ui,sans-serif}
 main{padding:0 14px calc(var(--dock-height, 170px) + 12px)}
 header{display:flex;align-items:center;min-height:56px}
@@ -104,19 +104,21 @@ header{justify-content:space-between}
 .profile .slide video{position:relative;opacity:0;object-fit:contain}
 .profile .slide video.ready{opacity:1}
 .video-error{position:absolute;inset:42% 0 auto;text-align:center;color:white}
-.profile-identity,.profile-bio{position:absolute;z-index:1;left:0;right:0;color:white;white-space:pre-wrap;overflow-wrap:anywhere}
-.profile-identity{top:0;background:linear-gradient(#050912b8,transparent);padding:13px 16px 22px;pointer-events:none}
+.profile-overlay{position:absolute;z-index:1;bottom:0;left:0;right:0;max-height:40%;color:white;background:linear-gradient(transparent,#101812e8 54%);padding:24px 16px 10px;pointer-events:none;white-space:pre-wrap;overflow-wrap:anywhere}
+.profile-identity{padding-bottom:4px}
 .profile-identity h2{margin:0;color:#fff;font-weight:800;text-shadow:0 1px 7px #000}
 .profile-identity span{display:block;font-size:13px;color:#d2d5dc;margin-top:3px}
-.profile-bio{bottom:0;max-height:26%;overflow:auto;background:linear-gradient(transparent,#050912e8 44%);padding:18px 16px 12px;font-size:15px;text-shadow:0 1px 5px #000;touch-action:pan-y}
-.gallery:has(.dots) .profile-bio{bottom:34px}
-.gallery:has(video) .profile-bio{bottom:48px}.gallery:has(video):has(.dots) .profile-bio{bottom:82px}
+.profile-bio{max-height:clamp(52px,16vh,135px);overflow:auto;padding:3px 0;font-size:15px;text-shadow:0 1px 5px #000;touch-action:pan-y;pointer-events:auto}
+.gallery:has(.dots) .profile-overlay{bottom:34px}
+.gallery:has(video) .profile-overlay{bottom:48px}.gallery:has(video):has(.dots) .profile-overlay{bottom:82px}
 .toolbar{flex:0 1 auto;min-width:0}.toolbar .auto{gap:5px;font-size:12px;white-space:nowrap}.toolbar .icon{min-width:34px;padding:0 4px}.toolbar .switch{width:34px;flex:none;height:22px}.toolbar .switch:after{width:14px;height:14px}.toolbar .auto[aria-checked=true] .switch:after{transform:translateX(12px)}
-#dock::before{content:"";position:absolute;bottom:100%;left:50%;width:100vw;height:min(27vh,220px);transform:translateX(-50%);pointer-events:none;background:linear-gradient(to bottom,transparent,var(--swipe-tint,transparent));opacity:var(--swipe-glow,0);transition:opacity .16s ease}
-.swipe-mark{z-index:3}
+#dock::before{content:"";position:absolute;bottom:100%;left:50%;width:100vw;height:74px;transform:translateX(-50%);pointer-events:none;background:linear-gradient(to bottom,transparent,color-mix(in srgb,var(--swipe-tint,transparent) 43%,transparent) calc(100% - 3px),var(--swipe-tint,transparent) calc(100% - 3px));opacity:var(--swipe-glow,0);transition:opacity .16s ease}
+.like-pop{position:fixed;inset:0;z-index:4;display:grid;place-items:center;pointer-events:none;color:#31b67d}
+.like-pop[hidden]{display:none}.like-pop svg{width:82px;height:82px;filter:drop-shadow(0 5px 12px #18242169);animation:heart-hop .48s both}
+@keyframes heart-hop{0%{opacity:0;transform:translateY(15px) scale(.45)}30%{opacity:1;transform:translateY(-20px) scale(1.19)}51%{transform:translateY(2px) scale(.95)}69%{transform:translateY(-5px) scale(1.04)}85%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-7px)}}
+@media(prefers-reduced-motion:reduce){.like-pop svg{animation:heart-static .24s both}@keyframes heart-static{0%,100%{opacity:0}20%,80%{opacity:1}}}
 @media(prefers-reduced-motion:reduce){.profile .slide:after{animation:none!important}}
 [data-swipe-card]{position:relative;touch-action:pan-y;transform-origin:50% 85%}[data-swipe-card] .slides{overflow-x:hidden}
-.swipe-mark{position:absolute;inset:32% 0 auto;pointer-events:none;text-align:center;font-size:78px;color:white;text-shadow:0 3px 20px #111}
 body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:5px}.sr-only{position:absolute;width:1px;height:1px;min-height:0;overflow:hidden;clip-path:inset(50%);padding:0;border:0}.sr-only:focus-visible{clip-path:none;width:auto;height:44px;z-index:3}
 .bot-row{display:flex;gap:5px;margin-top:6px}.bot-row button{flex:1;min-width:0;overflow-wrap:anywhere}
 .journal-counts button{padding:7px;text-align:left;background:var(--panel);font-size:12px;color:var(--muted)}.journal-counts strong{display:block;margin-top:3px;color:var(--ink);font-size:20px}.journal-counts button[aria-pressed=true]{border-color:var(--accent)}
@@ -310,7 +312,7 @@ lightbox.addEventListener('close', () => {
 
 const card = document.querySelector('[data-swipe-card]');
 if (card) {
-  const mark = card.querySelector('.swipe-mark');
+  const heart = document.querySelector(".like-pop");
   let gesture, preventClick = false, sending = false;
   card.addEventListener('pointerdown', event => {
     if (sending || event.button !== 0 || !event.isPrimary) return;
@@ -330,10 +332,8 @@ if (card) {
     }
     gesture.dx = dx;
     card.style.transform = 'translateX(' + dx + 'px) rotate(' + dx / 22 + 'deg)';
-    mark.textContent = dx >= 0 ? '♥' : '×';
     const strength = Math.min(1, Math.abs(dx) / 100);
-    mark.style.opacity = strength;
-    dock.style.setProperty('--swipe-tint', dx > 0 ? '#28b76edb' : '#d83a42de');
+    dock.style.setProperty('--swipe-tint', dx > 0 ? '#31b67dcb' : '#e85a73cc');
     dock.style.setProperty('--swipe-glow', strength);
   });
   function endSwipe(event) {
@@ -348,11 +348,15 @@ if (card) {
       sending = true;
       card.style.transition = 'transform 140ms ease-out';
       card.style.transform = 'translateX(' + (dx > 0 ? '115vw' : '-115vw') + ') rotate(' + (dx > 0 ? 13 : -13) + 'deg)';
-      setTimeout(() => action.form.requestSubmit(action), 145);
+      let delay = 145;
+      if (direction === 'right') {
+        heart.hidden = false;
+        delay = matchMedia('(prefers-reduced-motion: reduce)').matches ? 250 : 485;
+      }
+      setTimeout(() => action.form.requestSubmit(action), delay);
     } else {
       card.style.transition = 'transform 150ms ease-out';
       card.style.transform = '';
-      mark.textContent = '';
       dock.style.setProperty('--swipe-glow', 0);
     }
   }
@@ -1215,7 +1219,7 @@ class Page(BaseHTTPRequestHandler):
 <input type=hidden name=id value="{top.id if top else 0}">
 <input type=hidden name=revision value="{app.current_revision()}">
 {notice}<section class=profile {"data-swipe-card" if swipe else ""}>{content}
-<span class=swipe-mark aria-hidden=true></span></section>{swipe}</form>{watch}""",
+</section>{swipe}</form>{watch}""",
                 controls=footer, header_controls=utilities))
         except Exception as exc:
             app.auto = False
@@ -1249,6 +1253,7 @@ class Page(BaseHTTPRequestHandler):
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>{title} — Помощник Дайвинчика</title>
 <style>{APP_CSS}</style>
+<div class=like-pop hidden aria-hidden=true>{glyph("heart")}</div>
 <main><header><h1>{title}</h1>{header_controls}{export}</header>
 {content}</main>
 <footer id=dock>{controls}
@@ -1286,7 +1291,7 @@ class Page(BaseHTTPRequestHandler):
             heading += f'<span>{ESC(city)}</span>'
         heading += "</div>"
         bio = f'<div class=profile-bio tabindex=0>{ESC(description)}</div>' if description else ""
-        return heading + bio
+        return f'<div class=profile-overlay>{heading}{bio}</div>'
 
     @staticmethod
     def preview(item, media):
