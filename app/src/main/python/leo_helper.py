@@ -100,7 +100,7 @@ small{display:block;color:var(--muted);font-size:11px}
 .photo-counter{position:absolute;top:20px;left:16px;background:#141a34;color:white;padding:5px 9px;border-radius:10px}
 .photo-counter:empty{display:none}
 header{justify-content:space-between}
-.profile .gallery{margin-inline:-14px;border-radius:0}.profile .slide{height:min(68vh,680px);aspect-ratio:auto;max-height:none}.gallery{position:relative}.profile .slide{background:#11182a}
+.profile .gallery{margin-inline:-14px;border-radius:0}.profile .slide{height:var(--photo-height,68vh);aspect-ratio:auto;max-height:none}.gallery{position:relative}.profile .slide{background:#11182a}
 .profile .slide .original{position:absolute;inset:0;height:100%;width:100%;object-fit:contain;opacity:0;transition:opacity .24s ease}
 .profile .slide .original.ready{opacity:1}
 .profile .slide .preview{position:absolute;inset:0;height:100%;width:100%;object-fit:cover;filter:blur(14px) brightness(.8);transform:scale(1.08)}
@@ -133,7 +133,21 @@ body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;
 
 GALLERY_JS = """
 const dock = document.querySelector('#dock');
-new ResizeObserver(() => document.documentElement.style.setProperty('--dock-height', dock.offsetHeight + 'px')).observe(dock);
+function fitProfile() {
+  document.documentElement.style.setProperty('--dock-height', dock.offsetHeight + 'px');
+  const media = document.querySelector('.profile .slides');
+  if (!media) return;
+  const top = media.getBoundingClientRect().top + window.scrollY;
+  const available = window.innerHeight - dock.offsetHeight - top;
+  document.documentElement.style.setProperty('--photo-height', Math.max(210, Math.floor(available)) + 'px');
+}
+const layoutObserver = new ResizeObserver(fitProfile);
+layoutObserver.observe(dock);
+layoutObserver.observe(document.querySelector('header'));
+const notice = document.querySelector('#status');
+if (notice) layoutObserver.observe(notice);
+window.addEventListener('resize', fitProfile);
+fitProfile();
 const slides = document.querySelector('.slides');
 const dots = [...document.querySelectorAll('.dots button')];
 if (slides && dots.length) {
@@ -183,6 +197,7 @@ const zoom = lightbox.querySelector('.zoom-area');
 const full = zoom.querySelector('img');
 const counter = lightbox.querySelector('output');
 let currentPhoto = 0, photoList = [], journalPhoto = false;
+let pageAnimation = null;
 let scale = 1, offsetX = 0, offsetY = 0, opened = 0;
 const fingers = new Map();
 let pinchStart = null;
@@ -216,6 +231,35 @@ function showPhoto(index) {
     }).catch(() => {});
   }
 }
+async function turnPhoto(index) {
+  if (pageAnimation || index < 0 || index >= photoList.length || index === currentPhoto) return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    showPhoto(index);
+    return;
+  }
+  const direction = index > currentPhoto ? 1 : -1;
+  try {
+    pageAnimation = zoom.animate([
+      {transform:'translateX(0)',opacity:1},
+      {transform:'translateX(' + (-direction * 24) + '%)',opacity:0}
+    ], {duration:95,easing:'ease-in',fill:'forwards'});
+    await pageAnimation.finished;
+    if (!lightbox.open) return;
+    const outgoing = pageAnimation;
+    showPhoto(index);
+    pageAnimation = zoom.animate([
+      {transform:'translateX(' + (direction * 30) + '%)',opacity:0},
+      {transform:'translateX(0)',opacity:1}
+    ], {duration:165,easing:'ease-out'});
+    outgoing.cancel();
+    await pageAnimation.finished;
+  } catch {
+    // Closing the viewer cancels any active slide transition.
+  } finally {
+    if (pageAnimation) pageAnimation.cancel();
+    pageAnimation = null;
+  }
+}
 document.querySelectorAll('[data-open]').forEach(button => button.addEventListener('click', event => {
   const image = button.querySelector('img.original') || button.querySelector('img');
   journalPhoto = button.classList.contains('avatar');
@@ -235,6 +279,7 @@ document.querySelectorAll('[data-open]').forEach(button => button.addEventListen
   showPhoto(photoList.indexOf(image));
 }));
 zoom.addEventListener('pointerdown', event => {
+  if (pageAnimation) return;
   zoom.setPointerCapture(event.pointerId);
   const horizontalBound = zoom.clientWidth * (scale - 1) / 2;
   const verticalBound = zoom.clientHeight * (scale - 1) / 2;
@@ -289,13 +334,13 @@ function finishZoom(event) {
   if (event.type !== 'pointerup' || finger.pinched) return;
   if (finger.moved) {
     if (!finger.dismiss && finger.edge && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.25)
-      showPhoto(currentPhoto + (dx < 0 ? 1 : -1));
+      turnPhoto(currentPhoto + (dx < 0 ? 1 : -1));
     return;
   }
   const box = zoom.getBoundingClientRect();
   const part = (event.clientX - box.left) / box.width;
-  if (part < .25) showPhoto(currentPhoto - 1);
-  else if (part > .75) showPhoto(currentPhoto + 1);
+  if (part < .25) turnPhoto(currentPhoto - 1);
+  else if (part > .75) turnPhoto(currentPhoto + 1);
   else {
     scale = scale > 1 ? 1 : 2;
     drawZoom();
@@ -305,6 +350,7 @@ zoom.addEventListener('pointerup', finishZoom);
 zoom.addEventListener('pointercancel', finishZoom);
 lightbox.querySelector('button').addEventListener('click', () => lightbox.close());
 lightbox.addEventListener('close', () => {
+  if (pageAnimation) pageAnimation.cancel();
   opened++;
   zoom.style.transition = "";
   zoom.style.transform = "";
@@ -314,6 +360,7 @@ lightbox.addEventListener('close', () => {
   full.removeAttribute('src');
 });
 
+let swipeInProgress = false;
 const card = document.querySelector('[data-swipe-card]');
 if (card) {
   const heart = document.querySelector(".like-pop");
@@ -323,6 +370,7 @@ if (card) {
     preventClick = false;
     if (event.target.closest('.dots,.profile-bio') ||
         (event.target.matches('video') && event.clientY > event.target.getBoundingClientRect().bottom - 50)) return;
+    swipeInProgress = true;
     gesture = {id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, dragging: false};
   });
   card.addEventListener('pointermove', event => {
@@ -344,7 +392,7 @@ if (card) {
     if (!gesture || gesture.id !== event.pointerId) return;
     const {dx, dragging} = gesture;
     gesture = null;
-    if (!dragging) return;
+    if (!dragging) { swipeInProgress = false; return; }
     preventClick = true;
     const direction = dx > 0 ? 'right' : 'left';
     const action = document.querySelector('[data-swipe="' + direction + '"]');
@@ -362,6 +410,7 @@ if (card) {
       card.style.transition = 'transform 150ms ease-out';
       card.style.transform = '';
       dock.style.setProperty('--swipe-glow', 0);
+      swipeInProgress = false;
     }
   }
   card.addEventListener('pointerup', endSwipe);
@@ -447,6 +496,7 @@ async function watchState() {
     await pause(journal ? 700 : 180);
     try {
       const state = await (await fetch(watch.dataset.url)).json();
+      if (!journal && swipeInProgress) continue;
       const banner = document.querySelector('#status');
       if (banner && state.history) {
         banner.hidden = false;
@@ -1237,7 +1287,6 @@ class Page(BaseHTTPRequestHandler):
 </section>{swipe}</form>{watch}""",
                 controls=footer, header_controls=utilities))
         except Exception as exc:
-            app.auto = False
             self.send(f'<meta charset=utf-8><p>{ESC(str(exc))}</p><a href="{BASE}">Попробовать снова</a>', code=503)
 
     @staticmethod
@@ -1415,8 +1464,7 @@ class Page(BaseHTTPRequestHandler):
                         app.press(top, group, button, key)
                         app.notice = "Ответ отправлен."
         except Exception as exc:
-            app.auto = False
-            app.notice = f"Остановлено. {exc}"
+            app.notice = f"Не удалось выполнить действие. {exc}"
         self.send_response(303)
         self.send_header("Location", self.path)
         self.end_headers()
