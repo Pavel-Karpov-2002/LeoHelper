@@ -49,8 +49,11 @@ svg{display:inline-block;flex:none;width:20px;height:20px;vertical-align:middle}
 #dock{position:fixed;z-index:2;bottom:0;left:50%;transform:translateX(-50%);width:min(100%,42rem);padding:7px 12px max(7px,env(safe-area-inset-bottom));background:var(--bg);border-top:1px solid var(--line)}
 .dock-bottom,.toolbar,nav,.actions,.extras,.repeat,.person{display:flex;align-items:center;gap:7px}
 .dock-bottom{margin-top:6px} nav{flex:1;min-width:0}
-nav a{flex:1;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--muted);min-height:44px;border-radius:22px;font-size:14px;font-weight:700}
-nav a[aria-current=page]{background:var(--selected);color:#fff}
+nav{gap:8px}
+nav a{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:0 8px;border-radius:14px;background:var(--panel);color:var(--ink);font-size:14px;font-weight:500}
+nav a svg{width:18px;height:18px}
+nav a[aria-current=page]{outline:1px solid var(--accent);outline-offset:-1px;color:var(--accent);font-weight:700}
+.dock-bottom>form button{border:0;border-radius:14px;background:var(--panel)}
 .toolbar{background:var(--panel);border-radius:11px;padding:0 3px 0 8px}
 .auto{display:flex;flex:1;align-items:center;justify-content:space-between;gap:8px;padding:0 6px;background:none;border:0;font-size:14px;font-weight:700;text-align:left}
 .switch{background:var(--line);width:42px;height:24px;border-radius:16px;position:relative}
@@ -63,9 +66,11 @@ nav a[aria-current=page]{background:var(--selected);color:#fff}
 .slide{position:relative;display:block;flex:0 0 100%;min-width:0;width:100%;aspect-ratio:4/3;max-height:50vh;scroll-snap-align:start;scroll-snap-stop:always;background:var(--panel);border:0;border-radius:0;padding:0}
 .slide img,.slide video{display:block;width:100%;height:100%;object-fit:contain} .slide img[data-failed]{display:none}
 .video button{position:absolute;bottom:8px;left:50%;translate:-50% 0;white-space:nowrap;padding:0 12px}
-.dots{display:flex;justify-content:center} .dots button{width:30px;min-height:34px;padding:0;border:0;background:none}
-.dots button:after{content:'';display:inline-block;width:7px;height:7px;vertical-align:middle;border-radius:6px;background:var(--muted);opacity:.55}
-.dots button[aria-current=true]:after{width:16px;background:var(--accent);opacity:1}
+.dots{position:absolute;z-index:3;top:8px;left:12px;right:12px;display:flex;gap:5px}
+.dots button{position:relative;flex:1;min-width:0;min-height:36px;padding:0;border:0;background:none;color:white}
+.dots button:after{content:'';position:absolute;top:10px;left:0;right:0;height:3px;border-radius:4px;background:#ffffff70;box-shadow:0 1px 4px #0009}
+.dots button[aria-current=true]:after{background:white}
+.dots button svg{position:absolute;top:17px;left:50%;width:14px;height:14px;transform:translateX(-50%);filter:drop-shadow(0 1px 2px #000)}
 .caption{white-space:pre-wrap;overflow-wrap:anywhere} .profile p{margin:6px 0 0}
 .actions,.extras{flex-wrap:wrap;margin-top:6px}
 .actions button,.extras button:first-child{flex:1} .actions button,.extras button{padding:5px 8px}
@@ -109,8 +114,7 @@ header{justify-content:space-between}
 .profile-identity h2{margin:0;color:#fff;font-weight:800;text-shadow:0 1px 7px #000}
 .profile-identity span{display:block;font-size:13px;color:#d2d5dc;margin-top:3px}
 .profile-bio{max-height:clamp(52px,16vh,135px);overflow:auto;padding:3px 0;font-size:15px;text-shadow:0 1px 5px #000;touch-action:pan-y;pointer-events:auto}
-.gallery:has(.dots) .profile-overlay{bottom:34px}
-.gallery:has(video) .profile-overlay{bottom:48px}.gallery:has(video):has(.dots) .profile-overlay{bottom:82px}
+.gallery:has(video) .profile-overlay{bottom:48px}
 .toolbar{flex:0 1 auto;min-width:0}.toolbar .auto{gap:5px;font-size:12px;white-space:nowrap}.toolbar .icon{min-width:34px;padding:0 4px}.toolbar .switch{width:34px;flex:none;height:22px}.toolbar .switch:after{width:14px;height:14px}.toolbar .auto[aria-checked=true] .switch:after{transform:translateX(12px)}
 #dock::before{content:"";position:absolute;bottom:100%;left:50%;width:100vw;height:74px;transform:translateX(-50%);pointer-events:none;background:linear-gradient(to bottom,transparent,color-mix(in srgb,var(--swipe-tint,transparent) 43%,transparent) calc(100% - 3px),var(--swipe-tint,transparent) calc(100% - 3px));opacity:var(--swipe-glow,0);transition:opacity .16s ease}
 .like-pop{position:fixed;inset:0;z-index:4;display:grid;place-items:center;pointer-events:none;color:#31b67d}
@@ -466,6 +470,7 @@ watchState();
 ICON_PATHS = {
     "heart": '<path fill="currentColor" stroke="none" d="M12 21 3.9 13a5 5 0 0 1 7.1-7.1l1 1 1-1a5 5 0 0 1 7.1 7.1Z"/>',
     "down": '<path fill="currentColor" stroke="none" d="M15 3H7c-1 0-1.7.6-2 1.5l-2 6A2 2 0 0 0 5 13h5l-.8 4.5a2 2 0 0 0 3.4 1.8L17 13V5a2 2 0 0 0-2-2Zm4 0h3v10h-3z"/>',
+    "cards": '<path d="m10 4 9 2a2 2 0 0 1 1.5 2.4l-1.8 8.1"/><rect x="4" y="7" width="12" height="13" rx="2" transform="rotate(-10 10 13.5)"/>',
     "people": '<circle cx="9" cy="7" r="3"/><path d="M2 20v-2a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v2ZM16 4a3 3 0 0 1 0 6m2 3a5 5 0 0 1 4 5v2"/>',
     "list": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h10M7 16h7"/>',
     "trash": '<path d="M4 7h16M6 7l1 14h10l1-14M9 7V4h6v3m-5 4v6m4-6v6"/>',
@@ -1267,7 +1272,7 @@ class Page(BaseHTTPRequestHandler):
 <main><header><h1>{title}</h1>{header_controls}{export}</header>
 {content}</main>
 <footer id=dock>{controls}
-<div class=dock-bottom><nav aria-label="Разделы"><a href="{BASE}"{profile_active}>{glyph("people")} Анкеты</a>
+<div class=dock-bottom><nav aria-label="Разделы"><a href="{BASE}"{profile_active}>{glyph("cards")} Анкеты</a>
 <a href="{BASE}/journal"{journal_active}>{glyph("list")} Журнал</a></nav>
 <form method=post action="{path}"><button class=icon name=action value="theme:{next_theme}"
  aria-label="{theme_label}" title="{theme_label}">{glyph("sun" if dark else "moon")}</button></form>
@@ -1336,7 +1341,8 @@ class Page(BaseHTTPRequestHandler):
                              f'<video data-video="{source}" aria-label="{label}" controls muted playsinline preload=none></video>'
                              '<span class=video-error hidden>Видео недоступно</span></div>')
             state = "true" if index == 0 else "false"
-            dots.append(f'<button type=button aria-label="{label}" aria-current="{state}"></button>')
+            video_icon = glyph("play") if kind == "video" else ""
+            dots.append(f'<button type=button aria-label="{label}" aria-current="{state}">{video_icon}</button>')
         controls = f'<div class=dots aria-label="Выбор медиа">{"".join(dots)}</div>' if count > 1 else ""
         overlay = Page.profile_overlay(caption) if caption else ""
         return f'<div class=gallery><div class=slides>{"".join(items)}</div>{overlay}{controls}</div>'
