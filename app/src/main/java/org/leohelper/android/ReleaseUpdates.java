@@ -48,13 +48,19 @@ final class ReleaseUpdates {
     private ReleaseUpdates() {}
 
     static void schedule(Context context) {
-        JobScheduler scheduler = context.getSystemService(JobScheduler.class);
-        if (scheduler.getPendingJob(POLL_JOB) != null) return;
-        JobInfo job = new JobInfo.Builder(POLL_JOB, new ComponentName(context, UpdateJobService.class))
-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-            .setPeriodic(8 * 60 * 60 * 1000L)
-            .build();
-        scheduler.schedule(job);
+        try {
+            JobScheduler scheduler = context.getSystemService(JobScheduler.class);
+            if (scheduler == null || scheduler.getPendingJob(POLL_JOB) != null) return;
+            JobInfo job = new JobInfo.Builder(POLL_JOB, new ComponentName(context, UpdateJobService.class))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setPeriodic(8 * 60 * 60 * 1000L)
+                .build();
+            if (scheduler.schedule(job) != JobScheduler.RESULT_SUCCESS) {
+                Log.w("LeoHelper", "Could not schedule background update checks");
+            }
+        } catch (RuntimeException error) {
+            Log.w("LeoHelper", "Background update checks are unavailable", error);
+        }
     }
 
     static Release latest(Context context) throws Exception {
