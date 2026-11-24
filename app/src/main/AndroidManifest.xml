@@ -11,6 +11,8 @@
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                       android:value="User-enabled duplicate profile handling in a Telegram chat while Telegram is open" />
         </service>
+        <service android:name=".UpdateJobService" android:permission="android.permission.BIND_JOB_SERVICE"
+                 android:exported="true" />
         <activity android:name=".MainActivity" android:exported="true"
                   android:configChanges="keyboardHidden|orientation|screenSize">
             <intent-filter>

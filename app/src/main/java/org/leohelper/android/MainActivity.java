@@ -32,6 +32,9 @@ public final class MainActivity extends Activity {
     private String baseUrl;
     private volatile boolean closing;
     private boolean bound;
+    private long checkedUpdatesAt;
+    private String promptedVersion;
+    private boolean resumed;
     private HelperService helper;
     private final ServiceConnection connection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
@@ -69,16 +72,51 @@ public final class MainActivity extends Activity {
         });
         setContentView(panel);
         prepareNotifications();
+        ReleaseUpdates.schedule(this);
         panel.loadData("<meta charset=utf-8><p>Подключение к Telegram…</p>", "text/html", "UTF-8");
         bound = bindService(new Intent(this, HelperService.class), connection, BIND_AUTO_CREATE);
     }
 
     @Override protected void onResume() {
         super.onResume();
+        resumed = true;
+        checkUpdates();
         if (baseUrl == null) return;
         String visible = panel.getUrl();
         if ((baseUrl + "/journal").equals(visible)) panel.loadUrl(visible);
         else panel.loadUrl(baseUrl);
+    }
+
+    @Override protected void onPause() {
+        resumed = false;
+        super.onPause();
+    }
+
+    private void downloadUpdate(ReleaseUpdates.Release release) {
+        showToast(ReleaseUpdates.download(this, release) ? "Скачивание APK запущено" : "Не удалось открыть скачивание APK");
+    }
+
+    private void checkUpdates() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (checkedUpdatesAt != 0 && now - checkedUpdatesAt < 15 * 60 * 1000) return;
+        checkedUpdatesAt = now;
+        new Thread(() -> {
+            try {
+                ReleaseUpdates.Release release = ReleaseUpdates.latest(this);
+                if (release == null) return;
+                runOnUiThread(() -> {
+                    ReleaseUpdates.notifyOnce(this, release);
+                    if (closing || !resumed || release.version.equals(promptedVersion)) return;
+                    promptedVersion = release.version;
+                    new AlertDialog.Builder(this).setTitle("Доступен LeoHelper " + release.version)
+                        .setMessage("Скачать APK с GitHub?")
+                        .setPositiveButton("Скачать APK", (dialog, which) -> downloadUpdate(release))
+                        .setNegativeButton("Позже", null).show();
+                });
+            } catch (Exception networkFailure) {
+                runOnUiThread(() -> checkedUpdatesAt = 0);
+            }
+        }, "leo-update-check").start();
     }
 
     private void prepareNotifications() {

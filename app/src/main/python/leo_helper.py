@@ -571,10 +571,29 @@ def media_kind(message):
     return ""
 
 
-def fingerprint(messages, photos):
-    data = json.dumps([(m.raw_text, hashlib.sha256(p).hexdigest())
-                       for m, p in zip(messages, photos)], ensure_ascii=False)
+def profile_digest(captions, media_hashes):
+    data = json.dumps(list(zip(captions, media_hashes)), ensure_ascii=False)
     return hashlib.sha256(data.encode()).hexdigest()
+
+
+def comparable_caption(caption):
+    caption = re.sub(r"\A([^,\n]+,\s*)\d{1,3}(?=[ \t]*(?:,|[–—-]|\n|$))",
+                     r"\g<1>{age}", caption)
+    return re.sub(
+        r"(?im)^(\s*(?:дата рождения|birth date|birthday)\s*:\s*)"
+        r"\d{1,4}[./-]\d{1,2}[./-]\d{1,4}(?=[ \t]*(?:\n|$))",
+        r"\g<1>{birth_date}", caption)
+
+
+def caption_parts(stored, current):
+    lines = stored.split("\n")
+    index = 0
+    parts = []
+    for caption in current:
+        end = index + caption.count("\n") + 1
+        parts.append("\n".join(lines[index:end]))
+        index = end
+    return parts if index == len(lines) else None
 
 
 class Helper:
@@ -608,6 +627,7 @@ class Helper:
         self.auto = False
         self.auto_feedback_until = 0
         self.auto_check = None
+        self.auto_send = None
         self.auto_revision = None
         self.composing = False
         self.notice = ""
@@ -815,17 +835,37 @@ class Helper:
     def is_deleted(self, message_id):
         return self.db.execute("SELECT 1 FROM deleted WHERE message_id = ?", (message_id,)).fetchone()
 
-    async def profile_key(self, group):
-        parts = []
+    async def profile_fingerprints(self, group):
+        captions = [item.raw_text or "" for item in group]
+        media_hashes = []
         for item in group:
             if media_kind(item) == "video":
-                parts.append(f"video:{item.video.id}".encode())
+                payload = f"video:{item.video.id}".encode()
             else:
-                data, _ = await self.load_media(item.id, "photo", item)
-                if not data:
+                payload, _ = await self.load_media(item.id, "photo", item)
+                if not payload:
                     raise RuntimeError("Telegram не вернул фото анкеты")
-                parts.append(data)
-        return fingerprint(group, parts)
+            media_hashes.append(hashlib.sha256(payload).hexdigest())
+        key = profile_digest(captions, media_hashes)
+        caption = "\n".join(captions)
+        normalized = comparable_caption(caption)
+        if normalized == caption:
+            return key, []
+        matches = []
+        for stored_key, stored_caption in self.db.execute(
+                "SELECT fingerprint, caption FROM journal_profiles WHERE status = 'sent'"):
+            if stored_key == key or comparable_caption(stored_caption) != normalized:
+                continue
+            parts = caption_parts(stored_caption, captions)
+            if parts is not None and profile_digest(parts, media_hashes) == stored_key:
+                matches.append(stored_key)
+        return key, matches
+
+    async def profile_key(self, group):
+        key, matches = await self.profile_fingerprints(group)
+        if self.choice(key) is None and len(matches) == 1:
+            return matches[0]
+        return key
 
     def schedule_media(self, message_id, mode, message=None):
         lookup = (message_id, mode)
@@ -867,23 +907,31 @@ class Helper:
             message = await self.client.get_messages(self.bot, ids=message_id)
         return message.video if message and not message.out else None
 
-    async def video_block(self, document, offset):
-        cache_key = (document.id, offset)
-        cached = self.video_blocks.get(cache_key)
-        if cached is not None:
-            self.video_blocks.move_to_end(cache_key)
-            return cached
-        chunks = self.client.iter_download(document, offset=offset, limit=1,
-                                           request_size=VIDEO_BLOCK, file_size=document.size)
+    async def video_chunks(self, document, offset, end):
+        # Keep the Telegram iterator and its download connection open across the range.
+        while offset <= end:
+            cached = self.video_blocks.get((document.id, offset))
+            if cached is None:
+                break
+            self.video_blocks.move_to_end((document.id, offset))
+            yield cached
+            offset += VIDEO_BLOCK
+        if offset > end:
+            return
+
+        chunks = self.client.iter_download(
+            document, offset=offset, limit=(end - offset) // VIDEO_BLOCK + 1,
+            request_size=VIDEO_BLOCK, file_size=document.size)
         try:
-            block = bytes(await anext(chunks.__aiter__(), b""))
+            async for data in chunks:
+                block = bytes(data)
+                self.video_blocks[(document.id, offset)] = block
+                if len(self.video_blocks) > 40:
+                    self.video_blocks.popitem(last=False)
+                yield block
+                offset += VIDEO_BLOCK
         finally:
             await chunks.close()
-        if block:
-            self.video_blocks[cache_key] = block
-            if len(self.video_blocks) > 16:
-                self.video_blocks.popitem(last=False)
-        return block
 
     async def load_media(self, message_id, mode, message=None):
         lookup = (message_id, mode)
@@ -931,12 +979,19 @@ class Helper:
         return self.db.execute("SELECT status FROM journal WHERE message_id = ?",
                                (top.id,)).fetchone()
 
-    def press(self, top, group, button, key, *, automatic=False):
+    def press(self, top, group, button, key):
+        return get_running_loop().run_until_complete(self.send_reaction(top, group, button, key))
+
+    async def send_reaction(self, top, group, button, key, *, automatic=False):
+        await asyncio.sleep(0)
+        if automatic and not self.auto:
+            return False
         if self.waiting == top.id or (key and (self.sent(top) or self.was_auto_replied(top.id))):
             raise RuntimeError("Ответ для этого сообщения уже отправлялся")
-        get_running_loop().run_until_complete(asyncio.sleep(0))
         latest = self.latest()
-        if not latest or latest.id != top.id:
+        if not latest or latest is not top:
+            if automatic:
+                return False
             raise RuntimeError("Чат обновился. Проверьте новое сообщение")
         text = button if isinstance(button, str) else button.text
         if automatic:
@@ -951,8 +1006,8 @@ class Helper:
         self.waiting = top.id
         self.deadline = time.monotonic() + 25
         try:
-            result = (self.client.send_message(self.bot, text, parse_mode=None)
-                      if isinstance(button, str) else button.click())
+            result = await (self.client.send_message(self.bot, text, parse_mode=None)
+                            if isinstance(button, str) else button.click())
         except FloodWaitError:
             # Telegram rejected the send before accepting any message.
             self.waiting = 0
@@ -968,6 +1023,7 @@ class Helper:
         if key and not automatic:
             self.db.execute("UPDATE journal SET status = 'sent' WHERE message_id = ?", (top.id,))
             self.db.commit()
+        return True
 
     def send_command(self, top, group, buttons, key, command):
         reactions, _ = self.manual_actions(group, buttons, key)
@@ -1022,15 +1078,49 @@ class Helper:
             elif action in {"❤", "👎"}:
                 self.db.execute("INSERT OR REPLACE INTO preferences VALUES (?, ?)", (key, action))
 
+    @staticmethod
+    def ad_button(group):
+        if len(group) != 1:
+            return None
+        message = group[0]
+        if message.media is not None and not isinstance(message.media, MessageMediaWebPage):
+            return None
+        caption = message.raw_text or ""
+        if re.search(r"(?m)^\s*\d+[.)]\s+", caption):
+            return None
+        if not re.search(r"(?i)@leomatchglobal\b|\bреклам(?:а|ный|ное)\b", caption):
+            return None
+        choices = [button for row in message.buttons or [] for button in row
+                   if isinstance(button.button.type, (ButtonTypeDefault, InlineButtonTypeCallback))
+                   and re.fullmatch(r"(?:🚀\s*)?смотреть анкеты", emoji(button.text), re.I)]
+        return choices[0] if len(choices) == 1 else None
+
     async def repeat_choice(self, group):
-        key = await self.profile_key(group)
-        return key, self.choice(key)
+        return await self.profile_fingerprints(group)
+
+    async def auto_reply(self, top, group, button, key):
+        try:
+            if await self.send_reaction(top, group, button, key, automatic=True):
+                self.notice = "Повтор пропущен." if key else "Реклама пропущена."
+                self.auto_feedback_until = time.monotonic() + 4
+        except Exception as exc:
+            self.notice = f"Не удалось отправить автоответ. {exc}"
+            self.auto = False
 
     def tick(self):
         if not self.auto or self.composing or not self.history_ready or self.album_pending():
             return
+        if self.auto_send and not self.auto_send.done():
+            return
         top, group, buttons, _, profile = self.inspect(include_key=False)
-        if not top or not profile or self.waiting == top.id or self.sent(top) or self.was_auto_replied(top.id):
+        if not top or self.waiting == top.id or self.sent(top) or self.was_auto_replied(top.id):
+            return
+        if not profile:
+            button = self.ad_button(group)
+            if button:
+                self.auto_send = get_running_loop().create_task(self.auto_reply(top, group, button, ""))
+            return
+        if not any(re.search(r"[^\W_]", item.raw_text or "") for item in group):
             return
         revision = self.current_revision()
         if self.auto_revision != revision:
@@ -1042,18 +1132,23 @@ class Helper:
         if not self.auto_check or not self.auto_check.done():
             return
         check, self.auto_check = self.auto_check, None
-        key, desired = check.result()
+        try:
+            key, matches = check.result()
+        except Exception:
+            return
+        desired = self.choice(key)
         if not desired:
+            candidates = [(match, self.choice(match)) for match in matches]
+            reactions = {emoji(choice) for _, choice in candidates if choice}
+            if len(reactions) != 1:
+                return
+            key, desired = next((match, choice) for match, choice in candidates if choice)
+        if emoji(desired) not in {"❤", "👎"}:
             return
-        controls, _ = self.manual_actions(group, buttons, key)
-        choices = [(action, label) for action, label in controls if emoji(label) == emoji(desired)]
-        if len(choices) != 1:
-            return
-        action, label = choices[0]
-        button = label if action.startswith("manual:") else buttons[int(action.split(":")[1])]
-        self.press(top, group, button, key, automatic=True)
-        self.notice = "Повтор пропущен."
-        self.auto_feedback_until = time.monotonic() + 4
+        actions, _ = self.actions(group, buttons, key)
+        choices = [button for _, button in actions if emoji(button.text) == emoji(desired)]
+        if len(choices) == 1:
+            self.auto_send = get_running_loop().create_task(self.auto_reply(top, group, choices[0], key))
 
 
 class Page(BaseHTTPRequestHandler):
@@ -1485,36 +1580,54 @@ class VideoPage(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             if first:
-                end = min(end, start + 4 * VIDEO_BLOCK - 1)
+                end = min(end, start + 16 * VIDEO_BLOCK - 1)
 
         offset = start // VIDEO_BLOCK * VIDEO_BLOCK
+        chunks = self.server.helper.video_chunks(document, offset, end)
         try:
-            first_block = self.telegram_result(self.server.helper.video_block(document, offset))
+            first_block = self.telegram_result(anext(chunks, b""))
             if start - offset >= len(first_block):
+                self.telegram_result(chunks.aclose())
                 return self.send("", code=503)
         except Exception:
             return self.send("", code=503)
-        self.send_response(206 if range_header else 200)
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Content-Type", document.mime_type)
-        self.send_header("Content-Length", str(end - start + 1))
-        self.send_header("Cache-Control", "no-store")
-        if range_header:
-            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
-        self.end_headers()
+        next_block = None
         try:
+            self.send_response(206 if range_header else 200)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Type", document.mime_type)
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Cache-Control", "no-store")
+            if range_header:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+            self.end_headers()
             block = first_block
-            while offset <= end:
+            while block and offset <= end:
                 begin = max(0, start - offset)
                 finish = min(len(block), end - offset + 1)
+                if offset + VIDEO_BLOCK <= end:
+                    next_block = asyncio.run_coroutine_threadsafe(
+                        anext(chunks, b""), self.server.telegram_loop)
                 self.wfile.write(block[begin:finish])
                 offset += VIDEO_BLOCK
-                if offset <= end:
-                    block = self.telegram_result(self.server.helper.video_block(document, offset))
-                    if not block:
-                        break
+                if next_block is None:
+                    break
+                block = next_block.result(timeout=25)
+                next_block = None
         except Exception:
             self.close_connection = True
+        finally:
+            if next_block is not None:
+                next_block.cancel()
+            # Closing the iterator releases the Telegram download connection.
+            async def close_chunks():
+                await asyncio.sleep(0)
+                await chunks.aclose()
+            try:
+                self.telegram_result(close_chunks())
+            except Exception:
+                pass
+
 
 @contextmanager
 def video_http(helper):
@@ -1570,7 +1683,7 @@ def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_
         app.subscribe()
         app.request_history()
         with video_http(app), HTTPServer(("127.0.0.1", 0 if on_ready else 8765), Page) as server:
-            server.timeout = 0.08
+            server.timeout = 0.02
             next_auto = 0
             reported_auto = False
             url = f"http://127.0.0.1:{server.server_port}{BASE}"
@@ -1584,6 +1697,8 @@ def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_
                     app.notice = "Автопропуск выключен."
                 server.handle_request()
                 if app.auto != reported_auto:
+                    if reported_auto and not app.auto and on_auto_stopped and app.notice.startswith("Не удалось отправить"):
+                        on_auto_stopped("Откройте приложение, чтобы продолжить просмотр.")
                     reported_auto = app.auto
                     if on_auto_mode_changed:
                         on_auto_mode_changed(reported_auto)
@@ -1600,7 +1715,7 @@ def main(prompt=input, secret_prompt=None, on_ready=None, data_dir=None, should_
                         app.notice = f"Остановлено. Проверьте чат. {exc}"
                     if was_auto and not app.auto and on_auto_stopped:
                         on_auto_stopped("Откройте приложение, чтобы продолжить просмотр.")
-                get_running_loop().run_until_complete(asyncio.sleep(0.015))
+                get_running_loop().run_until_complete(asyncio.sleep(0.01))
 
 
 if __name__ == "__main__":
