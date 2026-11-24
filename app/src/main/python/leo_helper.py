@@ -66,7 +66,6 @@ nav a[aria-current=page]{outline:1px solid var(--accent);outline-offset:-1px;col
 .slides::-webkit-scrollbar{display:none}
 .slide{position:relative;display:block;flex:0 0 100%;min-width:0;width:100%;aspect-ratio:4/3;max-height:50vh;scroll-snap-align:start;scroll-snap-stop:always;background:var(--panel);border:0;border-radius:0;padding:0}
 .slide img,.slide video{display:block;width:100%;height:100%;object-fit:contain} .slide img[data-failed]{display:none}
-.video button{position:absolute;bottom:8px;left:50%;translate:-50% 0;white-space:nowrap;padding:0 12px}
 .dots{position:absolute;z-index:3;top:8px;left:12px;right:12px;display:flex;gap:5px}
 .dots button{position:relative;flex:1;min-width:0;min-height:36px;padding:0;border:0;background:none;color:white}
 .dots button:after{content:'';position:absolute;top:10px;left:0;right:0;height:3px;border-radius:4px;background:#ffffff70;box-shadow:0 1px 4px #0009}
@@ -110,15 +109,28 @@ header{justify-content:space-between}
 .profile .slide video{position:relative;opacity:0;object-fit:contain}
 .profile .slide video.ready{opacity:1}
 .video-error{position:absolute;inset:42% 0 auto;text-align:center;color:white}
+.video-controls{position:absolute;z-index:2;inset:8px 12px auto;display:flex;align-items:center;gap:6px;min-height:48px;padding:0 4px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:14px}
+.gallery:has(.dots) .video-controls{top:48px}
+.video-controls[hidden]{display:none}
+.video-controls button{display:grid;place-items:center;min-height:46px;width:44px;flex:none;border:0;background:transparent;color:var(--accent)}
+.video-controls button[data-playing=true] .play,.video-controls button[data-playing=false] .pause,.video-controls button[aria-pressed=true] .volume,.video-controls button[aria-pressed=false] .volume-off{display:none}
+.video-progress{appearance:none;min-width:0;flex:1;height:44px;margin:0 4px;cursor:pointer;background:transparent;touch-action:none}
+.video-progress::-webkit-slider-runnable-track{height:4px;border-radius:4px;background:linear-gradient(to right,var(--accent) var(--played,0%),var(--line) var(--played,0%))}
+.video-progress::-webkit-slider-thumb{appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:50%;background:var(--accent)}
+.video-progress:disabled{opacity:.55;cursor:default}
+.video.is-buffering:not(:has(.video-controls[hidden])):after{content:"";position:absolute;top:calc(50% - 13px);left:calc(50% - 13px);width:26px;height:26px;border:2px solid #ffffff55;border-top-color:white;border-radius:50%;animation:sync-spin 1s linear infinite;pointer-events:none}
 .profile-overlay{position:absolute;z-index:1;bottom:0;left:0;right:0;max-height:40%;color:white;background:linear-gradient(transparent,#101812e8 54%);padding:24px 16px 10px;pointer-events:none;white-space:pre-wrap;overflow-wrap:anywhere}
 .profile-identity{padding-bottom:4px}
 .profile-identity h2{margin:0;color:#fff;font-weight:800;text-shadow:0 1px 7px #000}
 .profile-identity span{display:block;font-size:13px;color:#d2d5dc;margin-top:3px}
 .profile-bio{max-height:clamp(52px,16vh,135px);overflow:auto;padding:3px 0;font-size:15px;text-shadow:0 1px 5px #000;touch-action:pan-y;pointer-events:auto}
-.gallery:has(video) .profile-overlay{bottom:48px}
 .toolbar{flex:0 1 auto;min-width:0}.toolbar .auto{gap:5px;font-size:12px;white-space:nowrap}.toolbar .icon{min-width:34px;padding:0 4px}.toolbar .switch{width:34px;flex:none;height:22px}.toolbar .switch:after{width:14px;height:14px}.toolbar .auto[aria-checked=true] .switch:after{transform:translateX(12px)}
 #dock::before{content:"";position:absolute;bottom:100%;left:50%;width:100vw;height:74px;transform:translateX(-50%);pointer-events:none;background:linear-gradient(to bottom,transparent,color-mix(in srgb,var(--swipe-tint,transparent) 43%,transparent) calc(100% - 3px),var(--swipe-tint,transparent) calc(100% - 3px));opacity:var(--swipe-glow,0);transition:opacity .16s ease}
-.like-pop{position:fixed;inset:0;z-index:4;display:grid;place-items:center;pointer-events:none;color:#31b67d}
+#dock[data-auto-feedback=like]{--swipe-tint:#31b67dcb}
+#dock[data-auto-feedback=dislike]{--swipe-tint:#e85a73cc}
+#dock[data-auto-feedback]::before{animation:auto-glow .52s ease-out}
+@keyframes auto-glow{0%,24%{opacity:.95}100%{opacity:0}}
+.like-pop{position:fixed;top:50%;left:50%;width:82px;height:82px;transform:translate(-50%,-50%);z-index:4;display:grid;place-items:center;pointer-events:none;color:#31b67d}
 .auto-pop{position:fixed;inset:0;z-index:4;display:grid;place-items:center;pointer-events:none;color:#fff}.auto-pop svg{width:68px;height:68px;padding:12px;border-radius:50%;background:#202e28bd;animation:auto-arrow .5s both}@keyframes auto-arrow{0%{opacity:0;transform:translateX(-24px) scale(.85)}32%{opacity:1;transform:translateX(0) scale(1)}64%{opacity:1}100%{opacity:0;transform:translateX(34px)}}@media(prefers-reduced-motion:reduce){.auto-pop svg{animation:heart-static .3s both}}
 .like-pop[hidden]{display:none}.like-pop svg{width:82px;height:82px;filter:drop-shadow(0 5px 12px #18242169);animation:heart-hop .48s both}
 @keyframes heart-hop{0%{opacity:0;transform:translateY(15px) scale(.45)}30%{opacity:1;transform:translateY(-20px) scale(1.19)}51%{transform:translateY(2px) scale(.95)}69%{transform:translateY(-5px) scale(1.04)}85%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-7px)}}
@@ -370,8 +382,7 @@ if (card) {
   card.addEventListener('pointerdown', event => {
     if (sending || event.button !== 0 || !event.isPrimary) return;
     preventClick = false;
-    if (event.target.closest('.dots,.profile-bio') ||
-        (event.target.matches('video') && event.clientY > event.target.getBoundingClientRect().bottom - 50)) return;
+    if (event.target.closest('.dots,.profile-bio,.video-controls')) return;
     swipeInProgress = true;
     gesture = {id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, dragging: false};
   });
@@ -381,6 +392,7 @@ if (card) {
     if (!gesture.dragging) {
       if (Math.abs(dx) < 12 || Math.abs(dx) <= Math.abs(dy) * 1.25) return;
       gesture.dragging = true;
+      delete dock.dataset.autoFeedback;
       card.setPointerCapture(event.pointerId);
       card.style.transition = 'none';
     }
@@ -462,21 +474,13 @@ if (search) {
   }));
 }
 const visibleVideos = new Set();
-const playVisible = () => {
-  visibleVideos.forEach(video => {
-    if (document.hidden || lightbox.open) video.pause();
-    else if (!video.dataset.started) {
-      video.dataset.started = 'true';
-      video.play().catch(() => { delete video.dataset.started; });
-    }
-  });
-};
+const videoControllers = new Map();
+const playVisible = () => visibleVideos.forEach(video => videoControllers.get(video)());
 const videoObserver = new IntersectionObserver(entries => {
   entries.forEach(({target: video, isIntersecting, intersectionRatio}) => {
     if (!isIntersecting || intersectionRatio < .55) {
       visibleVideos.delete(video);
-      video.pause();
-      delete video.dataset.started;
+      videoControllers.get(video)();
       return;
     }
     visibleVideos.add(video);
@@ -485,9 +489,82 @@ const videoObserver = new IntersectionObserver(entries => {
   playVisible();
 }, {threshold: [.55]});
 document.querySelectorAll('video[data-video]').forEach(video => {
+  const slide = video.parentElement;
+  const controls = slide.querySelector('.video-controls');
+  const playback = controls.querySelector('[data-playing]');
+  const volume = controls.querySelector('[aria-pressed]');
+  const progress = controls.querySelector('.video-progress');
+  let userPaused = false;
+  function updatePlayback() {
+    playback.dataset.playing = String(!video.paused || slide.classList.contains('is-buffering'));
+    playback.setAttribute('aria-label', playback.dataset.playing === 'true' ? 'Пауза' : 'Воспроизвести');
+  }
+  function updateProgress() {
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    progress.disabled = duration <= 0;
+    progress.max = duration || 1;
+    progress.value = video.currentTime;
+    progress.style.setProperty('--played', (duration ? video.currentTime / duration * 100 : 0) + '%');
+  }
+  function playBuffered() {
+    if (!visibleVideos.has(video) || document.hidden || lightbox.open || userPaused || video.ended || video.error) {
+      slide.classList.remove('is-buffering');
+      video.pause();
+      delete video.dataset.started;
+      updatePlayback();
+      return;
+    }
+    if (video.dataset.started) return;
+    const time = video.currentTime;
+    const required = Math.min(2, video.duration - time);
+    const buffered = video.buffered;
+    let ahead = 0;
+    for (let i = 0; i < buffered.length; i++) {
+      if (buffered.start(i) <= time + .05 && buffered.end(i) >= time) {
+        ahead = buffered.end(i) - time;
+        break;
+      }
+    }
+    const ready = video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+        Number.isFinite(required) && ahead + .05 >= required;
+    slide.classList.toggle('is-buffering', !ready);
+    updatePlayback();
+    if (ready) {
+      video.dataset.started = 'true';
+      video.play().catch(() => { delete video.dataset.started; updatePlayback(); });
+    }
+  }
+  videoControllers.set(video, playBuffered);
+  playback.addEventListener('click', () => {
+    userPaused = playback.dataset.playing === 'true';
+    if (!userPaused && video.ended) {
+      delete video.dataset.started;
+      video.currentTime = 0;
+    }
+    playBuffered();
+  });
+  volume.addEventListener('click', () => {
+    video.muted = !video.muted;
+    volume.setAttribute('aria-pressed', String(video.muted));
+    volume.setAttribute('aria-label', video.muted ? 'Включить звук' : 'Выключить звук');
+  });
+  progress.addEventListener('input', () => {
+    video.currentTime = Number(progress.value);
+    updateProgress();
+  });
+  for (const event of ['timeupdate', 'durationchange']) video.addEventListener(event, updateProgress);
+  for (const event of ['play', 'pause', 'ended']) video.addEventListener(event, updatePlayback);
+  for (const event of ['progress', 'canplay', 'seeked']) video.addEventListener(event, playBuffered);
+  video.addEventListener('waiting', () => {
+    if (video.paused) return;
+    video.pause();
+    delete video.dataset.started;
+    playBuffered();
+  });
   video.addEventListener('loadeddata', () => video.classList.add('ready'));
   video.addEventListener('error', () => {
-    video.parentElement.querySelector('.video-error').hidden = false;
+    slide.querySelector('.video-error').hidden = false;
+    controls.hidden = true;
     video.classList.add('ready');
   });
   videoObserver.observe(video);
@@ -541,6 +618,9 @@ ICON_PATHS = {
     "download": '<path d="M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5"/>',
     "sleep": '<path d="M3 13h7l-7 7h7m3-16h8l-8 8h8"/>',
     "play": '<path d="M8 5v14l11-7Z"/>',
+    "pause": '<path d="M9 5v14M15 5v14"/>',
+    "volume": '<path d="M11 5 6 9H3v6h3l5 4ZM15 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/>',
+    "volume-off": '<path d="M11 5 6 9H3v6h3l5 4Zm5 4 5 6m0-6-5 6"/>',
 }
 
 
@@ -647,6 +727,7 @@ class Helper:
         self.db.commit()
         self.auto = False
         self.auto_feedback_until = 0
+        self.auto_feedback = ""
         self.auto_check = None
         self.auto_send = None
         self.auto_revision = None
@@ -1127,6 +1208,7 @@ class Helper:
         try:
             if await self.send_reaction(top, group, button, key, automatic=True):
                 self.notice = "Повтор пропущен." if key else "Реклама пропущена."
+                self.auto_feedback = {"❤": "like", "👎": "dislike"}.get(emoji(button.text), "") if key else ""
                 self.auto_feedback_until = time.monotonic() + 4
         except Exception as exc:
             self.notice = f"Не удалось отправить автоответ. {exc}"
@@ -1349,10 +1431,12 @@ class Page(BaseHTTPRequestHandler):
 <button class=icon form=profile-form name=action value=refresh aria-label="Обновить" title="Обновить">{glyph("refresh")}</button>
 </div>"""
             watch = f'<span hidden id=watch data-url="{BASE}/state" data-revision="{app.current_revision()}" data-auto="{checked}"></span>' if waiting else ""
-            feedback = ""
-            if key and time.monotonic() < app.auto_feedback_until:
-                app.auto_feedback_until = 0
-                feedback = f'<div class=auto-pop aria-hidden=true>{glyph("auto-arrow")}</div>'
+            feedback = reaction = ""
+            if time.monotonic() < app.auto_feedback_until:
+                reaction, app.auto_feedback = app.auto_feedback, ""
+                if key:
+                    app.auto_feedback_until = 0
+                    feedback = f'<div class=auto-pop aria-hidden=true>{glyph("auto-arrow")}</div>'
             self.send(self.page("Анкеты", f"""
 {feedback}
 <form id=profile-form method=post action="{BASE}">
@@ -1360,7 +1444,7 @@ class Page(BaseHTTPRequestHandler):
 <input type=hidden name=revision value="{app.current_revision()}">
 {notice}<section class=profile {"data-swipe-card" if swipe else ""}>{content}
 </section>{swipe}</form>{watch}""",
-                controls=footer, header_controls=utilities))
+                controls=footer, header_controls=utilities, auto_feedback=reaction))
         except Exception as exc:
             self.send(f'<meta charset=utf-8><p>{ESC(str(exc))}</p><a href="{BASE}">Попробовать снова</a>', code=503)
 
@@ -1379,7 +1463,7 @@ class Page(BaseHTTPRequestHandler):
                 return "".join(parts)
         return '<div class=bot-row>' + "".join(controls.values()) + '</div>'
 
-    def page(self, title, content, *, journal=False, controls="", header_controls=""):
+    def page(self, title, content, *, journal=False, controls="", header_controls="", auto_feedback=""):
         path = BASE + "/journal" if journal else BASE
         theme = app.db.execute("SELECT value FROM settings WHERE key = 'theme'").fetchone()
         dark = bool(theme and theme[0] == "dark")
@@ -1388,6 +1472,7 @@ class Page(BaseHTTPRequestHandler):
         profile_active = ' aria-current="page"' if not journal else ""
         journal_active = ' aria-current="page"' if journal else ""
         export = f'<a class=icon href="{BASE}/csv" aria-label="Скачать CSV">{glyph("download")} CSV</a>' if journal else ""
+        feedback = f' data-auto-feedback="{auto_feedback}"' if auto_feedback else ""
         return f"""<!doctype html><html lang=ru data-theme="{'dark' if dark else 'light'}">
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>{title} — Помощник Дайвинчика</title>
@@ -1395,7 +1480,7 @@ class Page(BaseHTTPRequestHandler):
 <div class=like-pop hidden aria-hidden=true>{glyph("heart")}</div>
 <main><header><h1>{title}</h1>{header_controls}{export}</header>
 {content}</main>
-<footer id=dock>{controls}
+<footer id=dock{feedback}>{controls}
 <div class=dock-bottom><nav aria-label="Разделы"><a href="{BASE}"{profile_active}>{glyph("cards")} Анкеты</a>
 <a href="{BASE}/journal"{journal_active}>{glyph("list")} Журнал</a></nav>
 <form method=post action="{path}"><button class=icon name=action value="theme:{next_theme}"
@@ -1463,7 +1548,12 @@ class Page(BaseHTTPRequestHandler):
                 source = f"{app.video_origin}{BASE}/video?id={item.id}"
                 preview = Page.preview(item, item.video)
                 items.append(f'<div class="slide video">{preview}'
-                             f'<video data-video="{source}" aria-label="{label}" controls muted playsinline preload=metadata></video>'
+                             f'<video data-video="{source}" aria-label="{label}" muted playsinline preload=auto></video>'
+                             '<div class=video-controls role=group aria-label="Управление видео">'
+                             f'<button type=button data-playing=false aria-label="Воспроизвести">{glyph("play")}{glyph("pause")}</button>'
+                             '<input class=video-progress type=range min=0 max=1 step=any value=0 aria-label="Позиция видео" disabled>'
+                             f'<button type=button aria-pressed=true aria-label="Включить звук">{glyph("volume")}{glyph("volume-off")}</button>'
+                             '</div>'
                              '<span class=video-error hidden>Видео недоступно</span></div>')
             state = "true" if index == 0 else "false"
             video_icon = glyph("play") if kind == "video" else ""
@@ -1609,15 +1699,19 @@ class VideoPage(BaseHTTPRequestHandler):
 
         offset = start // VIDEO_BLOCK * VIDEO_BLOCK
         chunks = self.server.helper.video_chunks(document, offset, end)
-        try:
-            first_block = self.telegram_result(anext(chunks, b""))
-            if start - offset >= len(first_block):
-                self.telegram_result(chunks.aclose())
-                return self.send("", code=503)
-        except Exception:
-            return self.send("", code=503)
         next_block = None
         try:
+            try:
+                block = self.telegram_result(anext(chunks, b""))
+                if start - offset >= len(block):
+                    return self.send("", code=503)
+                lookahead = None
+                if offset + VIDEO_BLOCK <= end:
+                    lookahead = self.telegram_result(anext(chunks, b""))
+                    if not lookahead:
+                        return self.send("", code=503)
+            except Exception:
+                return self.send("", code=503)
             self.send_response(206 if range_header else 200)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Type", document.mime_type)
@@ -1626,19 +1720,21 @@ class VideoPage(BaseHTTPRequestHandler):
             if range_header:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
             self.end_headers()
-            block = first_block
             while block and offset <= end:
                 begin = max(0, start - offset)
                 finish = min(len(block), end - offset + 1)
-                if offset + VIDEO_BLOCK <= end:
+                if lookahead is None and offset + VIDEO_BLOCK <= end:
                     next_block = asyncio.run_coroutine_threadsafe(
                         anext(chunks, b""), self.server.telegram_loop)
                 self.wfile.write(block[begin:finish])
                 offset += VIDEO_BLOCK
-                if next_block is None:
+                if lookahead is not None:
+                    block, lookahead = lookahead, None
+                elif next_block is not None:
+                    block = next_block.result(timeout=25)
+                    next_block = None
+                else:
                     break
-                block = next_block.result(timeout=25)
-                next_block = None
         except Exception:
             self.close_connection = True
         finally:

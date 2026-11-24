@@ -145,26 +145,26 @@ final class ReleaseUpdates {
         prefs.edit().putString("notifiedVersion", release.version).apply();
     }
 
-    static boolean download(Context context, Release release) {
-        if (!valid(release)) return false;
+    static long download(Context context, Release release) {
+        if (!valid(release)) return -1;
         Uri uri = Uri.parse(release.url);
-        if (Build.VERSION.SDK_INT >= 29) {
+        if (Build.VERSION.SDK_INT >= 26) {
             try {
                 DownloadManager.Request request = new DownloadManager.Request(uri)
                     .setTitle(release.fileName()).setMimeType("application/vnd.android.package-archive")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, release.fileName());
-                context.getSystemService(DownloadManager.class).enqueue(request);
-                return true;
+                    .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS,
+                        System.currentTimeMillis() + "/" + release.fileName());
+                return context.getSystemService(DownloadManager.class).enqueue(request);
             } catch (RuntimeException error) {
                 Log.w("LeoHelper", "Could not enqueue update download", error);
             }
         }
         try {
             context.startActivity(new Intent(Intent.ACTION_VIEW, uri));
-            return true;
+            return 0;
         } catch (RuntimeException error) {
-            return false;
+            return -1;
         }
     }
 }

@@ -3,14 +3,19 @@ package org.leohelper.android;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.DownloadManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.net.Uri;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.provider.Settings;
 import android.text.InputType;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -28,6 +33,10 @@ import java.util.concurrent.CountDownLatch;
 public final class MainActivity extends Activity {
     private static final int SAVE_CSV = 1;
     private static final int NOTIFICATION_PERMISSION = 2;
+    private static final int INSTALL_ACCESS = 3;
+    private static final String PENDING_UPDATE = "pendingUpdateDownload";
+    private final Handler updateHandler = new Handler(Looper.getMainLooper());
+    private final Runnable updateDownloadCheck = this::checkUpdateDownload;
     private WebView panel;
     private String baseUrl;
     private volatile boolean closing;
@@ -80,6 +89,7 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         resumed = true;
+        updateHandler.post(updateDownloadCheck);
         checkUpdates();
         if (baseUrl == null) return;
         String visible = panel.getUrl();
@@ -89,11 +99,59 @@ public final class MainActivity extends Activity {
 
     @Override protected void onPause() {
         resumed = false;
+        updateHandler.removeCallbacks(updateDownloadCheck);
         super.onPause();
     }
 
     private void downloadUpdate(ReleaseUpdates.Release release) {
-        showToast(ReleaseUpdates.download(this, release) ? "Скачивание APK запущено" : "Не удалось открыть скачивание APK");
+        long id = ReleaseUpdates.download(this, release);
+        if (id > 0) {
+            getPreferences(MODE_PRIVATE).edit().putLong(PENDING_UPDATE, id).apply();
+            updateHandler.removeCallbacks(updateDownloadCheck);
+            updateHandler.post(updateDownloadCheck);
+        }
+        showToast(id > 0 ? "Скачивание APK запущено" : id == 0 ? "Скачивание открыто в браузере"
+            : "Не удалось открыть скачивание APK");
+    }
+
+    private void checkUpdateDownload() {
+        if (!resumed || closing || isFinishing() || Build.VERSION.SDK_INT < 26) return;
+        long id = getPreferences(MODE_PRIVATE).getLong(PENDING_UPDATE, 0);
+        if (id == 0) return;
+        DownloadManager manager = getSystemService(DownloadManager.class);
+        try {
+            int status;
+            try (Cursor download = manager.query(new DownloadManager.Query().setFilterById(id))) {
+                status = download != null && download.moveToFirst()
+                    ? download.getInt(download.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                    : DownloadManager.STATUS_FAILED;
+            }
+            if (status == DownloadManager.STATUS_FAILED) {
+                clearPendingUpdate();
+                promptedVersion = null;
+                checkedUpdatesAt = 0;
+                showToast("Не удалось скачать обновление");
+            } else if (status != DownloadManager.STATUS_SUCCESSFUL) {
+                updateHandler.postDelayed(updateDownloadCheck, 1000);
+            } else if (!getPackageManager().canRequestPackageInstalls()) {
+                showToast("Разрешите установку обновлений из LeoHelper");
+                startActivityForResult(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getPackageName())), INSTALL_ACCESS);
+            } else {
+                Uri apk = manager.getUriForDownloadedFile(id);
+                clearPendingUpdate();
+                if (apk == null) throw new IllegalStateException("Download URI is unavailable");
+                startActivity(new Intent(Intent.ACTION_INSTALL_PACKAGE, apk)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+            }
+        } catch (RuntimeException error) {
+            clearPendingUpdate();
+            showToast("Не удалось открыть установщик обновления");
+        }
+    }
+
+    private void clearPendingUpdate() {
+        getPreferences(MODE_PRIVATE).edit().remove(PENDING_UPDATE).apply();
     }
 
     private void checkUpdates() {
@@ -106,7 +164,8 @@ public final class MainActivity extends Activity {
                 if (release == null) return;
                 runOnUiThread(() -> {
                     ReleaseUpdates.notifyOnce(this, release);
-                    if (closing || !resumed || release.version.equals(promptedVersion)) return;
+                    if (closing || !resumed || release.version.equals(promptedVersion) ||
+                        getPreferences(MODE_PRIVATE).getLong(PENDING_UPDATE, 0) > 0) return;
                     promptedVersion = release.version;
                     new AlertDialog.Builder(this).setTitle("Доступен LeoHelper " + release.version)
                         .setMessage("Скачать APK с GitHub?")
@@ -171,6 +230,10 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == INSTALL_ACCESS && Build.VERSION.SDK_INT >= 26) {
+            if (!getPackageManager().canRequestPackageInstalls()) clearPendingUpdate();
+            return;
+        }
         if (request != SAVE_CSV || result != RESULT_OK || data == null || data.getData() == null) return;
         Uri target = data.getData();
         String source = baseUrl + "/csv";
