@@ -577,12 +577,21 @@ def profile_digest(captions, media_hashes):
 
 
 def comparable_caption(caption):
-    caption = re.sub(r"\A([^,\n]+,\s*)\d{1,3}(?=[ \t]*(?:,|[–—-]|\n|$))",
-                     r"\g<1>{age}", caption)
-    return re.sub(
+    caption = re.sub(
         r"(?im)^(\s*(?:дата рождения|birth date|birthday)\s*:\s*)"
         r"\d{1,4}[./-]\d{1,2}[./-]\d{1,4}(?=[ \t]*(?:\n|$))",
-        r"\g<1>{birth_date}", caption)
+        r"\g<1>{birth_date}", caption.strip())
+    heading, _, description = caption.partition("\n")
+    profile = re.fullmatch(
+        r"([^,]+),[ \t]*\d{1,3}(?:[ \t]*,[ \t]*(.*?))?(?:[ \t]+[–—-][ \t]+(.*))?[ \t]*",
+        heading)
+    if not profile:
+        return (caption,), ""
+    name, location, inline_description = profile.groups()
+    location = " ".join(emoji(location or "").casefold().split())
+    if re.fullmatch(r"📍\s*\d+(?:[.,]\d+)?\s*(?:км|м|km|m)", location):
+        location = "📍"
+    return (name.strip().casefold(), inline_description, description.strip()), location
 
 
 def caption_parts(stored, current):
@@ -593,7 +602,19 @@ def caption_parts(stored, current):
         end = index + caption.count("\n") + 1
         parts.append("\n".join(lines[index:end]))
         index = end
-    return parts if index == len(lines) else None
+    if index == len(lines):
+        yield parts
+    # Telegram albums commonly store the whole caption on one item.
+    # The exported/journal text joins the items with newlines.
+    nonempty = [index for index, caption in enumerate(current) if caption.strip()]
+    if len(nonempty) == 1:
+        index = nonempty[0]
+        after = len(current) - index - 1
+        if stored.startswith("\n" * index) and stored.endswith("\n" * after):
+            fallback = [""] * len(current)
+            fallback[index] = stored[index:len(stored) - after]
+            if fallback != parts:
+                yield fallback
 
 
 class Helper:
@@ -847,17 +868,21 @@ class Helper:
                     raise RuntimeError("Telegram не вернул фото анкеты")
             media_hashes.append(hashlib.sha256(payload).hexdigest())
         key = profile_digest(captions, media_hashes)
-        caption = "\n".join(captions)
-        normalized = comparable_caption(caption)
-        if normalized == caption:
+        if self.choice(key) is not None:
             return key, []
+        caption = "\n".join(captions)
+        normalized, location = comparable_caption(caption)
         matches = []
         for stored_key, stored_caption in self.db.execute(
                 "SELECT fingerprint, caption FROM journal_profiles WHERE status = 'sent'"):
-            if stored_key == key or comparable_caption(stored_caption) != normalized:
+            stored_normalized, stored_location = comparable_caption(stored_caption)
+            if stored_normalized != normalized:
                 continue
-            parts = caption_parts(stored_caption, captions)
-            if parts is not None and profile_digest(parts, media_hashes) == stored_key:
+            if location != stored_location and not (
+                    location and stored_location and "📍" in (location, stored_location)):
+                continue
+            if any(profile_digest(parts, media_hashes) == stored_key
+                   for parts in caption_parts(stored_caption, captions)):
                 matches.append(stored_key)
         return key, matches
 
