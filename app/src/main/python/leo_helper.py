@@ -108,7 +108,10 @@ header{justify-content:space-between}
 .profile .slide:has(.original[data-failed]):after{display:none}
 .profile .slide video{position:relative;opacity:0;object-fit:contain}
 .profile .slide video.ready{opacity:1}
-.video-error{position:absolute;inset:42% 0 auto;text-align:center;color:white}
+.video-status{position:absolute;z-index:1;top:44%;left:50%;translate:-50% -50%;width:max-content;max-width:calc(100% - 32px);display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);font-size:13px;text-align:center}
+.video-status[hidden],.video-status button[hidden]{display:none}
+.video-status button{min-height:44px;padding:0 10px;color:var(--accent)}
+.video-status[data-loading=true]:before{content:"";width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sync-spin 1s linear infinite}
 .video-controls{position:absolute;z-index:2;inset:8px 12px auto;display:flex;align-items:center;gap:6px;min-height:48px;padding:0 4px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:14px}
 .gallery:has(.dots) .video-controls{top:48px}
 .video-controls[hidden]{display:none}
@@ -118,7 +121,6 @@ header{justify-content:space-between}
 .video-progress::-webkit-slider-runnable-track{height:4px;border-radius:4px;background:linear-gradient(to right,var(--accent) var(--played,0%),var(--line) var(--played,0%))}
 .video-progress::-webkit-slider-thumb{appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:50%;background:var(--accent)}
 .video-progress:disabled{opacity:.55;cursor:default}
-.video.is-buffering:not(:has(.video-controls[hidden])):after{content:"";position:absolute;top:calc(50% - 13px);left:calc(50% - 13px);width:26px;height:26px;border:2px solid #ffffff55;border-top-color:white;border-radius:50%;animation:sync-spin 1s linear infinite;pointer-events:none}
 .profile-overlay{position:absolute;z-index:1;bottom:0;left:0;right:0;max-height:40%;color:white;background:linear-gradient(transparent,#101812e8 54%);padding:24px 16px 10px;pointer-events:none;white-space:pre-wrap;overflow-wrap:anywhere}
 .profile-identity{padding-bottom:4px}
 .profile-identity h2{margin:0;color:#fff;font-weight:800;text-shadow:0 1px 7px #000}
@@ -382,7 +384,7 @@ if (card) {
   card.addEventListener('pointerdown', event => {
     if (sending || event.button !== 0 || !event.isPrimary) return;
     preventClick = false;
-    if (event.target.closest('.dots,.profile-bio,.video-controls')) return;
+    if (event.target.closest('.dots,.profile-bio,.video-controls,.video-status button')) return;
     swipeInProgress = true;
     gesture = {id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, dragging: false};
   });
@@ -415,7 +417,7 @@ if (card) {
       card.querySelectorAll('video[data-video]').forEach(video => {
         videoObserver.unobserve(video);
         visibleVideos.delete(video);
-        video.pause();
+        videoControllers.get(video)();
         video.removeAttribute('src');
         video.load();
       });
@@ -494,7 +496,17 @@ document.querySelectorAll('video[data-video]').forEach(video => {
   const playback = controls.querySelector('[data-playing]');
   const volume = controls.querySelector('[aria-pressed]');
   const progress = controls.querySelector('.video-progress');
+  const status = slide.querySelector('.video-status');
+  const statusText = status.querySelector('span');
+  const retry = status.querySelector('button');
   let userPaused = false;
+  let retries = 0, attempt = 0, resumeAt = 0, retryReady = false;
+  function showVideoStatus(loading, failed = false) {
+    status.hidden = !loading && !failed;
+    status.dataset.loading = String(loading);
+    retry.hidden = !failed;
+    statusText.textContent = failed ? 'Видео не загрузилось' : 'Загружаем видео…';
+  }
   function updatePlayback() {
     playback.dataset.playing = String(!video.paused || slide.classList.contains('is-buffering'));
     playback.setAttribute('aria-label', playback.dataset.playing === 'true' ? 'Пауза' : 'Воспроизвести');
@@ -507,13 +519,22 @@ document.querySelectorAll('video[data-video]').forEach(video => {
     progress.style.setProperty('--played', (duration ? video.currentTime / duration * 100 : 0) + '%');
   }
   function playBuffered() {
-    if (!visibleVideos.has(video) || document.hidden || lightbox.open || userPaused || video.ended || video.error) {
+    if (!visibleVideos.has(video) || document.hidden || lightbox.open || userPaused || video.ended) {
       slide.classList.remove('is-buffering');
       video.pause();
       delete video.dataset.started;
+      if (!video.error) showVideoStatus(false);
       updatePlayback();
       return;
     }
+    if (retryReady) {
+      retryReady = false;
+      const source = new URL(video.dataset.video);
+      source.searchParams.set('retry', String(++attempt));
+      video.src = source.href;
+      return;
+    }
+    if (video.error) return;
     if (video.dataset.started) return;
     const time = video.currentTime;
     const required = Math.min(2, video.duration - time);
@@ -528,6 +549,7 @@ document.querySelectorAll('video[data-video]').forEach(video => {
     const ready = video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
         Number.isFinite(required) && ahead + .05 >= required;
     slide.classList.toggle('is-buffering', !ready);
+    showVideoStatus(!ready);
     updatePlayback();
     if (ready) {
       video.dataset.started = 'true';
@@ -562,10 +584,34 @@ document.querySelectorAll('video[data-video]').forEach(video => {
     playBuffered();
   });
   video.addEventListener('loadeddata', () => video.classList.add('ready'));
+  video.addEventListener('loadedmetadata', () => {
+    if (resumeAt > 0 && resumeAt < video.duration) video.currentTime = resumeAt;
+    resumeAt = 0;
+  });
   video.addEventListener('error', () => {
-    slide.querySelector('.video-error').hidden = false;
-    controls.hidden = true;
-    video.classList.add('ready');
+    if (!video.hasAttribute('src')) return;
+    delete video.dataset.started;
+    slide.classList.remove('is-buffering');
+    video.classList.remove('ready');
+    resumeAt = video.currentTime || resumeAt;
+    if ([2, 4].includes(video.error?.code) && retries < 2) {
+      showVideoStatus(true);
+      setTimeout(() => {
+        if (!video.hasAttribute('src')) return;
+        retryReady = true;
+        playBuffered();
+      }, 750 * ++retries);
+    } else {
+      showVideoStatus(false, true);
+    }
+    updatePlayback();
+  });
+  retry.addEventListener('click', () => {
+    retries = 0;
+    userPaused = false;
+    retryReady = true;
+    showVideoStatus(true);
+    playBuffered();
   });
   videoObserver.observe(video);
 });
@@ -686,15 +732,19 @@ def caption_parts(stored, current):
         yield parts
     # Telegram albums commonly store the whole caption on one item.
     # The exported/journal text joins the items with newlines.
-    nonempty = [index for index, caption in enumerate(current) if caption.strip()]
-    if len(nonempty) == 1:
-        index = nonempty[0]
+    if sum(bool(caption.strip()) for caption in current) != 1:
+        return
+    for index in range(len(current)):
         after = len(current) - index - 1
         if stored.startswith("\n" * index) and stored.endswith("\n" * after):
             fallback = [""] * len(current)
             fallback[index] = stored[index:len(stored) - after]
             if fallback != parts:
                 yield fallback
+
+
+class ProfilePhotoUnavailable(RuntimeError):
+    pass
 
 
 class Helper:
@@ -731,6 +781,7 @@ class Helper:
         self.auto_check = None
         self.auto_send = None
         self.auto_revision = None
+        self.auto_retry_at = None
         self.composing = False
         self.notice = ""
         self.media_cache = OrderedDict()
@@ -946,7 +997,7 @@ class Helper:
             else:
                 payload, _ = await self.load_media(item.id, "photo", item)
                 if not payload:
-                    raise RuntimeError("Telegram не вернул фото анкеты")
+                    raise ProfilePhotoUnavailable("Telegram не вернул фото анкеты")
             media_hashes.append(hashlib.sha256(payload).hexdigest())
         key = profile_digest(captions, media_hashes)
         if self.choice(key) is not None:
@@ -1183,6 +1234,7 @@ class Helper:
                     AND NOT EXISTS (SELECT 1 FROM journal WHERE fingerprint = ?)""", (key, key))
             elif action in {"❤", "👎"}:
                 self.db.execute("INSERT OR REPLACE INTO preferences VALUES (?, ?)", (key, action))
+        self.auto_revision = None
 
     @staticmethod
     def ad_button(group):
@@ -1208,7 +1260,8 @@ class Helper:
         try:
             if await self.send_reaction(top, group, button, key, automatic=True):
                 self.notice = "Повтор пропущен." if key else "Реклама пропущена."
-                self.auto_feedback = {"❤": "like", "👎": "dislike"}.get(emoji(button.text), "") if key else ""
+                answer = button if isinstance(button, str) else button.text
+                self.auto_feedback = {"❤": "like", "👎": "dislike"}.get(emoji(answer), "") if key else ""
                 self.auto_feedback_until = time.monotonic() + 4
         except Exception as exc:
             self.notice = f"Не удалось отправить автоответ. {exc}"
@@ -1229,11 +1282,13 @@ class Helper:
             return
         if not any(re.search(r"[^\W_]", item.raw_text or "") for item in group):
             return
-        revision = self.current_revision()
-        if self.auto_revision != revision:
+        revision = (self.current_revision(), self.sync_version)
+        retry_due = self.auto_retry_at is not None and time.monotonic() >= self.auto_retry_at
+        if self.auto_revision != revision or retry_due:
             if self.auto_check and not self.auto_check.done():
                 return
             self.auto_revision = revision
+            self.auto_retry_at = None
             self.auto_check = get_running_loop().create_task(self.repeat_choice(group))
             return
         if not self.auto_check or not self.auto_check.done():
@@ -1241,6 +1296,9 @@ class Helper:
         check, self.auto_check = self.auto_check, None
         try:
             key, matches = check.result()
+        except ProfilePhotoUnavailable:
+            self.auto_retry_at = time.monotonic() + 5
+            return
         except Exception:
             return
         desired = self.choice(key)
@@ -1256,6 +1314,10 @@ class Helper:
         choices = [button for _, button in actions if emoji(button.text) == emoji(desired)]
         if len(choices) == 1:
             self.auto_send = get_running_loop().create_task(self.auto_reply(top, group, choices[0], key))
+        elif not buttons and all(item.reply_markup is None for item in group):
+            # The bot sometimes sends a known card without a keyboard.
+            label = "❤️" if emoji(desired) == "❤" else "👎"
+            self.auto_send = get_running_loop().create_task(self.auto_reply(top, group, label, key))
 
 
 class Page(BaseHTTPRequestHandler):
@@ -1554,7 +1616,8 @@ class Page(BaseHTTPRequestHandler):
                              '<input class=video-progress type=range min=0 max=1 step=any value=0 aria-label="Позиция видео" disabled>'
                              f'<button type=button aria-pressed=true aria-label="Включить звук">{glyph("volume")}{glyph("volume-off")}</button>'
                              '</div>'
-                             '<span class=video-error hidden>Видео недоступно</span></div>')
+                             '<div class=video-status data-loading=true><span role=status>Загружаем видео…</span>'
+                             '<button type=button hidden>Повторить</button></div></div>')
             state = "true" if index == 0 else "false"
             video_icon = glyph("play") if kind == "video" else ""
             dots.append(f'<button type=button aria-label="{label}" aria-current="{state}">{video_icon}</button>')
@@ -1701,17 +1764,7 @@ class VideoPage(BaseHTTPRequestHandler):
         chunks = self.server.helper.video_chunks(document, offset, end)
         next_block = None
         try:
-            try:
-                block = self.telegram_result(anext(chunks, b""))
-                if start - offset >= len(block):
-                    return self.send("", code=503)
-                lookahead = None
-                if offset + VIDEO_BLOCK <= end:
-                    lookahead = self.telegram_result(anext(chunks, b""))
-                    if not lookahead:
-                        return self.send("", code=503)
-            except Exception:
-                return self.send("", code=503)
+            next_block = asyncio.run_coroutine_threadsafe(anext(chunks, b""), self.server.telegram_loop)
             self.send_response(206 if range_header else 200)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Type", document.mime_type)
@@ -1720,21 +1773,19 @@ class VideoPage(BaseHTTPRequestHandler):
             if range_header:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
             self.end_headers()
-            while block and offset <= end:
+            while next_block is not None:
+                block = next_block.result(timeout=25)
+                next_block = None
                 begin = max(0, start - offset)
                 finish = min(len(block), end - offset + 1)
-                if lookahead is None and offset + VIDEO_BLOCK <= end:
+                if finish <= begin:
+                    self.close_connection = True
+                    break
+                if offset + VIDEO_BLOCK <= end:
                     next_block = asyncio.run_coroutine_threadsafe(
                         anext(chunks, b""), self.server.telegram_loop)
                 self.wfile.write(block[begin:finish])
                 offset += VIDEO_BLOCK
-                if lookahead is not None:
-                    block, lookahead = lookahead, None
-                elif next_block is not None:
-                    block = next_block.result(timeout=25)
-                    next_block = None
-                else:
-                    break
         except Exception:
             self.close_connection = True
         finally:
