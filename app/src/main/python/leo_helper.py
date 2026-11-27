@@ -96,6 +96,8 @@ small{display:block;color:var(--muted);font-size:11px}
 #lightbox{border:0;background:#0b1023;color:white;max-width:none;max-height:none;width:100%;height:100%;margin:0;padding:0}
 #lightbox::backdrop{background:#0b1023}
 .zoom-area{width:100%;height:100%;overflow:hidden;touch-action:none}
+#lightbox video{display:block;width:100%;height:100%;object-fit:contain}
+#lightbox [hidden]{display:none}
 #lightbox img{display:block;width:100%;height:100%;object-fit:contain;user-select:none}
 .photo-counter{position:absolute;top:20px;left:16px;background:#141a34;color:white;padding:5px 9px;border-radius:10px}
 .photo-counter:empty{display:none}
@@ -181,17 +183,20 @@ if (slides && dots.length) {
 }
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function mediaUrl(path) {
+async function mediaBlob(path, signal) {
   for (let attempt = 0; attempt < 75; attempt++) {
-    const response = await fetch(path);
+    const response = await fetch(path, {signal});
     if (response.status === 202) {
       await pause(150);
       continue;
     }
     if (!response.ok) throw Error('Медиа недоступно');
-    return URL.createObjectURL(await response.blob());
+    return response.blob();
   }
   throw Error('Telegram долго загружает медиа');
+}
+async function mediaUrl(path) {
+  return URL.createObjectURL(await mediaBlob(path));
 }
 const thumbnails = new IntersectionObserver(entries => {
   entries.filter(entry => entry.isIntersecting).forEach(({target: image}) => {
@@ -214,7 +219,10 @@ function selectSlide(index) {
 const lightbox = document.querySelector('#lightbox');
 const zoom = lightbox.querySelector('.zoom-area');
 const full = zoom.querySelector('img');
-const counter = lightbox.querySelector('output');
+const journalVideo = lightbox.querySelector('video');
+const mediaStatus = lightbox.querySelector('.viewer-status');
+let viewerRequest;
+const counter = lightbox.querySelector('output:not(.viewer-status)');
 let currentPhoto = 0, photoList = [], journalPhoto = false;
 let pageAnimation = null;
 let scale = 1, offsetX = 0, offsetY = 0, opened = 0;
@@ -241,7 +249,28 @@ function showPhoto(index) {
   }
   full.removeAttribute('src');
   if (image.naturalWidth) full.src = image.src;
-  if (!image.naturalWidth || journalPhoto) {
+  if (journalPhoto) {
+    viewerRequest?.abort();
+    viewerRequest = new AbortController();
+    const source = new URL(image.dataset.media, location.href);
+    source.searchParams.set('kind', 'original');
+    mediaStatus.textContent = 'Загрузка медиа…';
+    mediaBlob(source, viewerRequest.signal).then(blob => {
+      if (!lightbox.open || opened !== token) return;
+      mediaStatus.textContent = '';
+      if (blob.type === 'application/x-leo-video') {
+        zoom.hidden = true;
+        mediaStatus.textContent = 'Загружаем видео…';
+        journalVideo.hidden = false;
+        journalVideo.src = image.dataset.video;
+        journalVideo.play().catch(() => {});
+      } else {
+        full.src = URL.createObjectURL(blob);
+      }
+    }).catch(() => {
+      if (lightbox.open && opened === token) mediaStatus.textContent = 'Медиа не загрузилось';
+    });
+  } else if (!image.naturalWidth) {
     const source = new URL(image.dataset.media, location.href);
     source.searchParams.set('kind', 'photo');
     mediaUrl(source).then(url => {
@@ -367,10 +396,22 @@ function finishZoom(event) {
 }
 zoom.addEventListener('pointerup', finishZoom);
 zoom.addEventListener('pointercancel', finishZoom);
+journalVideo.addEventListener('loadeddata', () => { mediaStatus.textContent = ''; });
+journalVideo.addEventListener('error', () => {
+  if (journalVideo.hasAttribute('src')) mediaStatus.textContent = 'Видео не загрузилось';
+});
 lightbox.querySelector('button').addEventListener('click', () => lightbox.close());
 lightbox.addEventListener('close', () => {
   if (pageAnimation) pageAnimation.cancel();
   opened++;
+  viewerRequest?.abort();
+  viewerRequest = null;
+  journalVideo.pause();
+  journalVideo.removeAttribute('src');
+  journalVideo.load();
+  journalVideo.hidden = true;
+  zoom.hidden = false;
+  mediaStatus.textContent = '';
   zoom.style.transition = "";
   zoom.style.transform = "";
   fingers.clear();
@@ -824,6 +865,7 @@ class Helper:
         self.video_origin = ''
         self.jobs = {}
         self.media_slots = asyncio.Semaphore(3)
+        self.viewer_slots = asyncio.Semaphore(1)
         self.sync_task = None
         saved = self.db.execute("SELECT value FROM settings WHERE key = 'history_limit'").fetchone()
         self.history_limit = int(saved[0]) if saved else 100
@@ -1070,7 +1112,8 @@ class Helper:
 
     async def fetch_media(self, message_id, mode, message):
         lookup = (message_id, mode)
-        async with self.media_slots:
+        slots = self.viewer_slots if mode == 'original' else self.media_slots
+        async with slots:
             try:
                 item = message or self.recent.get(message_id) or await self.client.get_messages(self.bot, ids=message_id)
                 kind = media_kind(item) if item else ""
@@ -1081,7 +1124,9 @@ class Helper:
                             self.db.execute("INSERT OR REPLACE INTO thumbnails VALUES (?, ?)",
                                             (message_id, data))
                     result = (data, "image/jpeg")
-                elif mode == kind and kind == "photo":
+                elif mode == "original" and kind == "video":
+                    result = (b"video", "application/x-leo-video")
+                elif mode in {"photo", "original"} and kind == "photo":
                     result = (await item.download_media(bytes), "image/jpeg")
                 else:
                     result = (None, "")
@@ -1417,8 +1462,8 @@ class Page(BaseHTTPRequestHandler):
                 down_active = str(bool(choice and emoji(choice) == "👎")).lower()
                 name = caption.strip().split("\n", 1)[0].split(" – ", 1)[0]
                 category = {"❤": "liked", "👎": "disliked"}.get(reaction, "")
-                rows.append(f"""<tr data-answer="{category}" data-caption="{ESC(caption)}"><td><div class=person><button class=avatar type=button data-open aria-label="Открыть фото анкеты">
-<img data-media="{BASE}/media?id={row_id}&amp;kind=thumb" alt=""></button>
+                rows.append(f"""<tr data-answer="{category}" data-caption="{ESC(caption)}"><td><div class=person><button class=avatar type=button data-open aria-label="Открыть медиа анкеты">
+<img data-media="{BASE}/media?id={row_id}&amp;kind=thumb" data-video="{app.video_origin}{BASE}/video?id={row_id}" alt=""></button>
 <div class=person-text><strong title="{ESC(caption)}">{ESC(name)}</strong><small>{ESC(date[5:16])}</small></div></div></td>
 <td class=answer>{reaction_glyph(emoji(answer))}{"" if status == "sent" else " <small>Не подтверждён</small>"}</td>
 <td><form class=repeat method=post action="{BASE}/journal">
@@ -1478,7 +1523,7 @@ class Page(BaseHTTPRequestHandler):
                 mode = params["kind"][0]
             except (KeyError, ValueError):
                 return self.send("", code=400)
-            if mode not in {"photo", "thumb"} or message_id <= 0:
+            if mode not in {"photo", "thumb", "original"} or message_id <= 0:
                 return self.send("", code=400)
             if mode == "thumb":
                 if app.is_deleted(message_id):
@@ -1487,8 +1532,14 @@ class Page(BaseHTTPRequestHandler):
                                         (message_id,)).fetchone()
                 if stored:
                     return self.send(stored[0], "image/jpeg")
-            cached = app.media_cache.get((message_id, mode))
+            cache_key = (message_id, mode)
+            if mode == "original" and (message_id, "photo") in app.media_cache:
+                photo = app.media_cache[(message_id, "photo")]
+                if photo[0]:
+                    cache_key = (message_id, "photo")
+            cached = app.media_cache.get(cache_key)
             if cached is not None:
+                app.media_cache.move_to_end(cache_key)
                 data, kind = cached
                 return self.send(data, kind) if data else self.send("", code=404)
             app.schedule_media(message_id, mode)
@@ -1605,8 +1656,10 @@ class Page(BaseHTTPRequestHandler):
 <form method=post action="{path}"><button class=icon name=action value="theme:{next_theme}"
  aria-label="{theme_label}" title="{theme_label}">{glyph("sun" if dark else "moon")}</button></form>
 </div></footer>
-<dialog id=lightbox aria-label="Просмотр фотографии"><div class=zoom-area><img alt="Фото анкеты" draggable=false></div><output class=photo-counter></output>
-<button type=button aria-label="Закрыть фото">{glyph("close")}</button></dialog>
+<dialog id=lightbox aria-label="Просмотр медиа"><div class=zoom-area><img alt="Фото анкеты" draggable=false></div>
+<video hidden controls playsinline preload=none aria-label="Видео анкеты"></video>
+<output class="photo-counter viewer-status" role=status></output><output class=photo-counter></output>
+<button type=button aria-label="Закрыть просмотр">{glyph("close")}</button></dialog>
 <script>{GALLERY_JS}</script></html>"""
 
     @staticmethod

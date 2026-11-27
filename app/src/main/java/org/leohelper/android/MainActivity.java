@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
@@ -35,6 +37,7 @@ public final class MainActivity extends Activity {
     private static final int SAVE_CSV = 1;
     private static final int NOTIFICATION_PERMISSION = 2;
     private static final int INSTALL_ACCESS = 3;
+    private static final String INSTAGRAM_PROFILE = "https://www\\.instagram\\.com/[A-Za-z0-9_.]{1,30}/";
     private static final String PENDING_UPDATE = "pendingUpdateDownload";
     private final Handler updateHandler = new Handler(Looper.getMainLooper());
     private final Runnable updateDownloadCheck = this::checkUpdateDownload;
@@ -65,6 +68,23 @@ public final class MainActivity extends Activity {
         panel.setWebChromeClient(new WebChromeClient());
         panel.getSettings().setAllowFileAccess(false);
         panel.getSettings().setAllowContentAccess(false);
+        panel.setOnLongClickListener(view -> {
+            WebView.HitTestResult hit = panel.getHitTestResult();
+            String link = hit.getExtra();
+            if (hit.getType() != WebView.HitTestResult.SRC_ANCHOR_TYPE
+                    || link == null || !link.matches(INSTAGRAM_PROFILE)) return false;
+            String username = Uri.parse(link).getLastPathSegment();
+            new AlertDialog.Builder(this)
+                .setTitle(username)
+                .setPositiveButton("Скопировать", (dialog, which) -> {
+                    ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Instagram", username));
+                    if (Build.VERSION.SDK_INT < 33) showToast("Ник скопирован");
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+            return true;
+        });
         panel.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String target = request.getUrl().toString();
@@ -78,7 +98,7 @@ public final class MainActivity extends Activity {
                     return true;
                 }
                 if (request.isForMainFrame() && request.hasGesture()
-                        && target.matches("https://www\\.instagram\\.com/[A-Za-z0-9_.]{1,30}/")) {
+                        && target.matches(INSTAGRAM_PROFILE)) {
                     try {
                         startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl()));
                     } catch (ActivityNotFoundException error) {
