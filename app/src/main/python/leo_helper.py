@@ -106,8 +106,8 @@ header{justify-content:space-between}
 .profile .slide .preview{position:absolute;inset:0;height:100%;width:100%;object-fit:cover;filter:blur(14px) brightness(.8);transform:scale(1.08)}
 .profile .slide:has(.original:not(.ready)):after{content:"";position:absolute;z-index:1;left:calc(50% - 14px);top:calc(50% - 14px);width:28px;height:28px;border:2px solid #ffffff55;border-top-color:white;border-radius:100%;animation:sync-spin 1s linear infinite;pointer-events:none}
 .profile .slide:has(.original[data-failed]):after{display:none}
-.profile .slide video{position:relative;opacity:0;object-fit:contain}
-.profile .slide video.ready{opacity:1}
+.profile .slide video{position:relative;visibility:hidden;object-fit:contain}
+.profile .slide video.ready{visibility:visible}
 .video-status{position:absolute;z-index:1;top:44%;left:50%;translate:-50% -50%;width:max-content;max-width:calc(100% - 32px);display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);font-size:13px;text-align:center}
 .video-status[hidden],.video-status button[hidden]{display:none}
 .video-status button{min-height:44px;padding:0 10px;color:var(--accent)}
@@ -125,6 +125,7 @@ header{justify-content:space-between}
 .profile-identity{padding-bottom:4px}
 .profile-identity h2{margin:0;color:#fff;font-weight:800;text-shadow:0 1px 7px #000}
 .profile-identity span{display:block;font-size:13px;color:#d2d5dc;margin-top:3px}
+.profile-bio a{color:inherit;text-decoration:underline}
 .profile-bio{max-height:clamp(52px,16vh,135px);overflow:auto;padding:3px 0;font-size:15px;text-shadow:0 1px 5px #000;touch-action:pan-y;pointer-events:auto}
 .toolbar{flex:0 1 auto;min-width:0}.toolbar .auto{gap:5px;font-size:12px;white-space:nowrap}.toolbar .icon{min-width:34px;padding:0 4px}.toolbar .switch{width:34px;flex:none;height:22px}.toolbar .switch:after{width:14px;height:14px}.toolbar .auto[aria-checked=true] .switch:after{transform:translateX(12px)}
 #dock::before{content:"";position:absolute;bottom:100%;left:50%;width:100vw;height:74px;transform:translateX(-50%);pointer-events:none;background:linear-gradient(to bottom,transparent,color-mix(in srgb,var(--swipe-tint,transparent) 43%,transparent) calc(100% - 3px),var(--swipe-tint,transparent) calc(100% - 3px));opacity:var(--swipe-glow,0);transition:opacity .16s ease}
@@ -132,13 +133,13 @@ header{justify-content:space-between}
 #dock[data-auto-feedback=dislike]{--swipe-tint:#e85a73cc}
 #dock[data-auto-feedback]::before{animation:auto-glow .52s ease-out}
 @keyframes auto-glow{0%,24%{opacity:.95}100%{opacity:0}}
-.like-pop{position:fixed;top:50%;left:50%;width:82px;height:82px;transform:translate(-50%,-50%);z-index:4;display:grid;place-items:center;pointer-events:none;color:#31b67d}
+.like-pop{position:fixed;inset:0;z-index:4;display:grid;place-items:center;pointer-events:none;color:#31b67d}
 .auto-pop{position:fixed;inset:0;z-index:4;display:grid;place-items:center;pointer-events:none;color:#fff}.auto-pop svg{width:68px;height:68px;padding:12px;border-radius:50%;background:#202e28bd;animation:auto-arrow .5s both}@keyframes auto-arrow{0%{opacity:0;transform:translateX(-24px) scale(.85)}32%{opacity:1;transform:translateX(0) scale(1)}64%{opacity:1}100%{opacity:0;transform:translateX(34px)}}@media(prefers-reduced-motion:reduce){.auto-pop svg{animation:heart-static .3s both}}
 .like-pop[hidden]{display:none}.like-pop svg{width:82px;height:82px;filter:drop-shadow(0 5px 12px #18242169);animation:heart-hop .48s both}
-@keyframes heart-hop{0%{opacity:0;transform:translateY(15px) scale(.45)}30%{opacity:1;transform:translateY(-20px) scale(1.19)}51%{transform:translateY(2px) scale(.95)}69%{transform:translateY(-5px) scale(1.04)}85%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-7px)}}
+@keyframes heart-hop{0%{opacity:0;transform:scale(.45)}30%{opacity:1;transform:scale(1.19)}51%{transform:scale(.95)}69%{transform:scale(1.04)}85%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(1)}}
 @media(prefers-reduced-motion:reduce){.like-pop svg{animation:heart-static .24s both}@keyframes heart-static{0%,100%{opacity:0}20%,80%{opacity:1}}}
 @media(prefers-reduced-motion:reduce){.profile .slide:after{animation:none!important}}
-[data-swipe-card]{position:relative;touch-action:pan-y;transform-origin:50% 85%}[data-swipe-card] .slides{overflow-x:hidden}
+[data-swipe-card]{position:relative;touch-action:pan-y}[data-swipe-card] .slides{overflow-x:hidden}
 body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:5px}.sr-only{position:absolute;width:1px;height:1px;min-height:0;overflow:hidden;clip-path:inset(50%);padding:0;border:0}.sr-only:focus-visible{clip-path:none;width:auto;height:44px;z-index:3}
 .bot-row{display:flex;gap:5px;margin-top:6px}.bot-row button{flex:1;min-width:0;overflow-wrap:anywhere}
 .journal-counts button{padding:7px;text-align:left;background:var(--panel);font-size:12px;color:var(--muted)}.journal-counts strong{display:block;margin-top:3px;color:var(--ink);font-size:20px}.journal-counts button[aria-pressed=true]{border-color:var(--accent)}
@@ -399,7 +400,7 @@ if (card) {
       card.style.transition = 'none';
     }
     gesture.dx = dx;
-    card.style.transform = 'translateX(' + dx + 'px) rotate(' + dx / 22 + 'deg)';
+    card.style.transform = 'translateX(' + dx + 'px)';
     const strength = Math.min(1, Math.abs(dx) / 100);
     dock.style.setProperty('--swipe-tint', dx > 0 ? '#31b67dcb' : '#e85a73cc');
     dock.style.setProperty('--swipe-glow', strength);
@@ -422,7 +423,7 @@ if (card) {
         video.load();
       });
       card.style.transition = 'transform 140ms ease-out';
-      card.style.transform = 'translateX(' + (dx > 0 ? '115vw' : '-115vw') + ') rotate(' + (dx > 0 ? 13 : -13) + 'deg)';
+      card.style.transform = 'translateX(' + (dx > 0 ? '115vw' : '-115vw') + ')';
       let delay = 145;
       if (direction === 'right') {
         heart.hidden = false;
@@ -529,6 +530,7 @@ document.querySelectorAll('video[data-video]').forEach(video => {
     }
     if (retryReady) {
       retryReady = false;
+      video.classList.remove('ready');
       const source = new URL(video.dataset.video);
       source.searchParams.set('retry', String(++attempt));
       video.src = source.href;
@@ -583,7 +585,8 @@ document.querySelectorAll('video[data-video]').forEach(video => {
     delete video.dataset.started;
     playBuffered();
   });
-  video.addEventListener('loadeddata', () => video.classList.add('ready'));
+  video.addEventListener('playing', () => video.classList.add('ready'));
+  video.addEventListener('emptied', () => video.classList.remove('ready'));
   video.addEventListener('loadedmetadata', () => {
     if (resumeAt > 0 && resumeAt < video.duration) video.currentTime = resumeAt;
     resumeAt = 0;
@@ -668,6 +671,25 @@ ICON_PATHS = {
     "volume": '<path d="M11 5 6 9H3v6h3l5 4ZM15 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/>',
     "volume-off": '<path d="M11 5 6 9H3v6h3l5 4Zm5 4 5 6m0-6-5 6"/>',
 }
+
+
+INSTAGRAM_MENTION = re.compile(
+    r"(?<![\w@])(?i:instagram|insta|inst|инстаграм|инста|ins)[^\S\n]*:"
+    r"[^\S\n]*\*{0,2}[^\S\n]*(@?([A-Za-z0-9_](?:[A-Za-z0-9_.]{0,28}[A-Za-z0-9_])?))"
+    r"(?![\w-]|\.+[\w-])"
+)
+
+
+def profile_description(description):
+    parts = []
+    end = 0
+    for match in INSTAGRAM_MENTION.finditer(description):
+        start, username_end = match.span(1)
+        parts.append(ESC(description[end:start]))
+        parts.append(f'<a href="https://www.instagram.com/{match[2]}/">{ESC(match[1])}</a>')
+        end = username_end
+    parts.append(ESC(description[end:]))
+    return "".join(parts)
 
 
 def glyph(name):
@@ -1582,7 +1604,7 @@ class Page(BaseHTTPRequestHandler):
         if " – " in heading:
             heading, intro = heading.split(" – ", 1)
             detail = "\n".join(filter(None, (intro, detail)))
-        return f'<h2 class=caption>{ESC(heading)}</h2>' + (f'<p class=caption>{ESC(detail)}</p>' if detail else "")
+        return f'<h2 class=caption>{ESC(heading)}</h2>' + (f'<p class=caption>{profile_description(detail)}</p>' if detail else "")
 
     @staticmethod
     def profile_overlay(caption):
@@ -1600,7 +1622,7 @@ class Page(BaseHTTPRequestHandler):
         if city:
             heading += f'<span>{ESC(city)}</span>'
         heading += "</div>"
-        bio = f'<div class=profile-bio tabindex=0>{ESC(description)}</div>' if description else ""
+        bio = f'<div class=profile-bio tabindex=0>{profile_description(description)}</div>' if description else ""
         return f'<div class=profile-overlay>{heading}{bio}</div>'
 
     @staticmethod
@@ -1632,8 +1654,7 @@ class Page(BaseHTTPRequestHandler):
                              f'{preview}<img class=original data-media="{source}" alt="{label}" draggable=false></button>')
             else:
                 source = f"{app.video_origin}{BASE}/video?id={item.id}"
-                preview = Page.preview(item, item.video)
-                items.append(f'<div class="slide video">{preview}'
+                items.append('<div class="slide video">'
                              f'<video data-video="{source}" aria-label="{label}" muted playsinline preload=auto></video>'
                              '<div class=video-controls role=group aria-label="Управление видео">'
                              f'<button type=button data-playing=false aria-label="Воспроизвести">{glyph("play")}{glyph("pause")}</button>'

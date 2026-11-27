@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DownloadManager;
+import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
@@ -74,6 +75,15 @@ public final class MainActivity extends Activity {
                     save.setType("text/csv");
                     save.putExtra(Intent.EXTRA_TITLE, "leo-journal.csv");
                     startActivityForResult(save, SAVE_CSV);
+                    return true;
+                }
+                if (request.isForMainFrame() && request.hasGesture()
+                        && target.matches("https://www\\.instagram\\.com/[A-Za-z0-9_.]{1,30}/")) {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl()));
+                    } catch (ActivityNotFoundException error) {
+                        showToast("Не удалось открыть Instagram");
+                    }
                     return true;
                 }
                 return !target.equals(baseUrl) && !target.equals(baseUrl + "/journal");
