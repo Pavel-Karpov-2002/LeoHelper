@@ -690,6 +690,8 @@ def is_search_status(message):
 
 
 def media_kind(message):
+    if isinstance(getattr(message, "media", None), MessageMediaWebPage):
+        return ""
     if message.photo:
         return "photo"
     if getattr(message, "video", None):
@@ -1114,11 +1116,11 @@ class Helper:
         if key:
             return [(i, b) for i, b in safe if emoji(b.text) in {"❤", "👎"}], False
         if group and len(group) == 1 and (group[0].media is None or isinstance(group[0].media, MessageMediaWebPage)) and group[0].raw_text.strip():
-            # A previous keyboard is useful for profiles, but insufficient to identify an ad.
             current = [b.text for row in group[0].buttons or [] for b in row]
             menu = len(re.findall(r"(?m)^\s*\d+[.)]\s+", group[0].raw_text)) >= 2
             numbered = lambda label: bool(re.fullmatch(r"\d+(?:\s*🚀)?", emoji(label)))
-            actions = [(i, b) for i, b in safe if b.text in current or (menu and numbered(b.text))]
+            skip = self.ad_button(group, buttons)
+            actions = [(i, b) for i, b in safe if b is skip or b.text in current or (menu and numbered(b.text))]
             return actions, not menu and not any(numbered(b.text) for _, b in actions)
         return [], False
 
@@ -1236,22 +1238,44 @@ class Helper:
                 self.db.execute("INSERT OR REPLACE INTO preferences VALUES (?, ?)", (key, action))
         self.auto_revision = None
 
-    @staticmethod
-    def ad_button(group):
+    def ad_button(self, group, buttons):
         if len(group) != 1:
             return None
         message = group[0]
         if message.media is not None and not isinstance(message.media, MessageMediaWebPage):
             return None
-        caption = message.raw_text or ""
-        if re.search(r"(?m)^\s*\d+[.)]\s+", caption):
+        caption = (message.raw_text or "").strip().casefold()
+        if not caption or is_search_status(message):
             return None
-        if not re.search(r"(?i)@leomatchglobal\b|\bреклам(?:а|ный|ное)\b", caption):
+        if re.search(r"(?m)^\s*\d+[.)]\s*(?:смотреть анкеты|моя анкета|я больше не хочу)", caption):
             return None
-        choices = [button for row in message.buttons or [] for button in row
-                   if isinstance(button.button.type, (ButtonTypeDefault, InlineButtonTypeCallback))
-                   and re.fullmatch(r"(?:🚀\s*)?смотреть анкеты", emoji(button.text), re.I)]
-        return choices[0] if len(choices) == 1 else None
+        if re.search(r"\b(?:подожд[её]м пока|анкеты закончились|больше нет анкет|больше анкет нет|нет новых анкет)\b", caption):
+            return None
+        marked = bool(re.search(r"\b(?:leomatchglobal|реклам(?:а|ы|ный|ное|ная))\b", caption))
+        attached = any(message.buttons or [])
+        safe = [button for button in buttons if isinstance(button.button.type, (ButtonTypeDefault, InlineButtonTypeCallback))]
+        skip_labels = {"пропустить рекламу", "закрыть рекламу"}
+        labels = skip_labels | {"смотреть анкеты", "продолжить просмотр анкет", "продолжить смотреть анкеты"}
+        if marked:
+            labels.update(("пропустить", "дальше", "продолжить"))
+        choices = []
+        for button in safe:
+            label = " ".join(emoji(button.text).casefold().split()).strip("🚀▶➡➜⏩ ")
+            if label in labels:
+                choices.append((button, label))
+        if len(choices) != 1:
+            return None
+        choice, label = choices[0]
+        if not attached:
+            # Only reuse a one-button reply keyboard for an explicitly marked promo.
+            if not marked or len(buttons) != 1 or not isinstance(choice.button.type, ButtonTypeDefault):
+                return None
+        elif not marked and label not in skip_labels:
+            last_out = max((item for item in self.recent.values() if item.out and item.id < message.id),
+                           key=lambda item: item.id, default=None)
+            if len(safe) != 1 or not last_out or emoji(last_out.raw_text or "") not in {"❤", "👎"}:
+                return None
+        return choice
 
     async def repeat_choice(self, group):
         return await self.profile_fingerprints(group)
@@ -1276,7 +1300,7 @@ class Helper:
         if not top or self.waiting == top.id or self.sent(top) or self.was_auto_replied(top.id):
             return
         if not profile:
-            button = self.ad_button(group)
+            button = self.ad_button(group, buttons)
             if button:
                 self.auto_send = get_running_loop().create_task(self.auto_reply(top, group, button, ""))
             return
