@@ -39,7 +39,7 @@ APP_CSS = """
 :root{color-scheme:light;--bg:#f5f2e7;--panel:#e9e6d8;--control:#e2e5d8;--ink:#202e28;--muted:#535d57;--line:#bfc4b9;--accent:#3b6855;--active:#fff;--heart:#24834d;--selected:#3b6855}
 [data-theme=dark]{color-scheme:dark;--bg:#302d28;--panel:#403c33;--control:#494539;--ink:#f2ead6;--muted:#d4cbb8;--line:#696552;--accent:#cfe49d;--active:#27301d;--heart:#8fdfa9;--selected:#587342}
 *{box-sizing:border-box} body{margin:0 auto;max-width:42rem;background:var(--bg);color:var(--ink);font:16px/1.4 Roboto,system-ui,sans-serif}
-main{padding:0 14px calc(var(--dock-height, 170px) + 12px)}
+main{padding:0 14px calc(var(--dock-height, 170px) + 12px);overflow-x:clip}
 header{display:flex;align-items:center;min-height:56px}
 h1{font-size:30px;line-height:1.05;margin:0;letter-spacing:-.04em} h2{font-size:23px;line-height:1.18;margin:10px 0 4px}
 button,a{-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform .16s ease,filter .16s ease,background-color .16s ease} button:active,a:active{transform:scale(.94);filter:brightness(.83);transition-duration:.075s}
@@ -139,7 +139,7 @@ header{justify-content:space-between}
 @keyframes heart-hop{0%{opacity:0;transform:scale(.45)}30%{opacity:1;transform:scale(1.19)}51%{transform:scale(.95)}69%{transform:scale(1.04)}85%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(1)}}
 @media(prefers-reduced-motion:reduce){.like-pop svg{animation:heart-static .24s both}@keyframes heart-static{0%,100%{opacity:0}20%,80%{opacity:1}}}
 @media(prefers-reduced-motion:reduce){.profile .slide:after{animation:none!important}}
-[data-swipe-card]{position:relative;touch-action:pan-y}[data-swipe-card] .slides{overflow-x:hidden}
+[data-swipe-card]{position:relative;touch-action:pan-y}[data-swipe-card] .slides{overflow-x:hidden;touch-action:pinch-zoom}
 body{overflow-x:hidden}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:5px}.sr-only{position:absolute;width:1px;height:1px;min-height:0;overflow:hidden;clip-path:inset(50%);padding:0;border:0}.sr-only:focus-visible{clip-path:none;width:auto;height:44px;z-index:3}
 .bot-row{display:flex;gap:5px;margin-top:6px}.bot-row button{flex:1;min-width:0;overflow-wrap:anywhere}
 .journal-counts button{padding:7px;text-align:left;background:var(--panel);font-size:12px;color:var(--muted)}.journal-counts strong{display:block;margin-top:3px;color:var(--ink);font-size:20px}.journal-counts button[aria-pressed=true]{border-color:var(--accent)}
@@ -154,7 +154,9 @@ function fitProfile() {
   document.documentElement.style.setProperty('--dock-height', dock.offsetHeight + 'px');
   const media = document.querySelector('.profile .slides');
   if (!media) return;
-  const top = media.getBoundingClientRect().top + window.scrollY;
+  // CSS transforms change the bounding rectangle during a swipe, but not the layout offsets.
+  let top = 0;
+  for (let element = media; element; element = element.offsetParent) top += element.offsetTop;
   const available = window.innerHeight - dock.offsetHeight - top;
   document.documentElement.style.setProperty('--photo-height', Math.max(210, Math.floor(available)) + 'px');
 }
@@ -400,7 +402,8 @@ if (card) {
       card.style.transition = 'none';
     }
     gesture.dx = dx;
-    card.style.transform = 'translateX(' + dx + 'px)';
+    const angle = Math.max(-12, Math.min(12, dx / 22));
+    card.style.transform = `translateX(${dx}px) rotate(${angle}deg)`;
     const strength = Math.min(1, Math.abs(dx) / 100);
     dock.style.setProperty('--swipe-tint', dx > 0 ? '#31b67dcb' : '#e85a73cc');
     dock.style.setProperty('--swipe-glow', strength);
@@ -415,32 +418,40 @@ if (card) {
     const action = document.querySelector('[data-swipe="' + direction + '"]');
     if (event.type === 'pointerup' && action && Math.abs(dx) >= Math.max(68, innerWidth * .22)) {
       sending = true;
-      card.querySelectorAll('video[data-video]').forEach(video => {
-        videoObserver.unobserve(video);
-        visibleVideos.delete(video);
-        videoControllers.get(video)();
-        video.removeAttribute('src');
-        video.load();
-      });
       card.style.transition = 'transform 140ms ease-out';
-      card.style.transform = 'translateX(' + (dx > 0 ? '115vw' : '-115vw') + ')';
+      const sign = Math.sign(dx);
+      card.style.transform = `translateX(${sign * 115}vw) rotate(${sign * 12}deg)`;
       let delay = 145;
       if (direction === 'right') {
         heart.hidden = false;
         delay = matchMedia('(prefers-reduced-motion: reduce)').matches ? 250 : 485;
       }
-      setTimeout(() => action.form.requestSubmit(action), delay);
+      setTimeout(() => {
+        card.querySelectorAll('video[data-video]').forEach(video => {
+          videoObserver.unobserve(video);
+          visibleVideos.delete(video);
+          videoControllers.get(video)();
+          video.removeAttribute('src');
+          video.load();
+        });
+        action.form.requestSubmit(action);
+      }, delay);
     } else {
       card.style.transition = 'transform 150ms ease-out';
       card.style.transform = '';
-      dock.style.setProperty('--swipe-glow', 0);
+      dock.style.removeProperty('--swipe-tint');
+      dock.style.removeProperty('--swipe-glow');
       swipeInProgress = false;
     }
   }
   card.addEventListener('pointerup', endSwipe);
   card.addEventListener('pointercancel', endSwipe);
   card.addEventListener('click', event => {
-    if (preventClick) { event.preventDefault(); event.stopImmediatePropagation(); }
+    if (preventClick && event.target.closest('[data-open]')) {
+      preventClick = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   }, true);
 }
 
